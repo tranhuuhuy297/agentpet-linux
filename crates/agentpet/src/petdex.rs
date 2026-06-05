@@ -61,6 +61,38 @@ impl RemotePet {
     }
 }
 
+/// Maps an HTTP failure to a user-facing message that says *who* is at fault
+/// (Petdex's hosting, the user's connection, or the request) and what to do.
+/// Pure so it's unit-testable; `friendly_error` extracts the inputs.
+fn describe_http_failure(status: Option<u16>, unreachable: bool) -> String {
+    match status {
+        Some(429) => "Petdex's server is rate-limited (their hosting hit its quota) — \
+                      not a problem on your end. Try again in a few hours."
+            .into(),
+        Some(s) if (500..600).contains(&s) => {
+            format!("Petdex's server is having problems (HTTP {s}). Try again later.")
+        }
+        Some(s) => format!("Petdex rejected the request (HTTP {s})."),
+        None if unreachable => "Couldn't reach Petdex — check your internet connection.".into(),
+        None => "Network error while talking to Petdex.".into(),
+    }
+}
+
+/// Walks an error's source chain to the underlying `reqwest::Error` (if any)
+/// and renders it via [`describe_http_failure`]. Non-network errors (bad JSON,
+/// disk write) fall through to their own message.
+pub fn friendly_error(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = cur {
+        if let Some(req) = err.downcast_ref::<reqwest::Error>() {
+            let status = req.status().map(|s| s.as_u16());
+            return describe_http_failure(status, req.is_connect() || req.is_timeout());
+        }
+        cur = err.source();
+    }
+    format!("Download failed: {e}")
+}
+
 /// Tolerantly parses the manifest body into pets, skipping malformed entries
 /// (mirrors the macOS `Lenient` decode wrapper).
 pub fn parse_manifest(bytes: &[u8]) -> Vec<RemotePet> {
@@ -134,7 +166,10 @@ pub async fn gallery_worker(
             GalleryRequest::Fetch => {
                 let result = match fetch_manifest().await {
                     Ok(pets) => GalleryResult::Manifest(pets),
-                    Err(e) => GalleryResult::Failed(e.to_string()),
+                    Err(e) => GalleryResult::Failed(format!(
+                        "Couldn't load the pet library — {}",
+                        friendly_error(&e)
+                    )),
                 };
                 let _ = tx.send(result).await;
             }
@@ -147,7 +182,11 @@ pub async fn gallery_worker(
                         let _ = reload.send(()).await;
                         GalleryResult::Downloaded(id)
                     }
-                    Err(e) => GalleryResult::Failed(e.to_string()),
+                    Err(e) => GalleryResult::Failed(format!(
+                        "Couldn't install '{}' — {}",
+                        pet.name(),
+                        friendly_error(e.as_ref())
+                    )),
                 };
                 let _ = tx.send(result).await;
             }
@@ -183,7 +222,9 @@ pub async fn bootstrap_if_needed(reload: async_channel::Sender<()>) {
                 let _ = reload.send(()).await;
                 eprintln!("agentpet: installed starter pet '{}'", pet.slug);
             }
-            Err(e) => eprintln!("agentpet: starter pet download failed: {e}"),
+            Err(e) => {
+                eprintln!("agentpet: starter pet download failed: {}", friendly_error(e.as_ref()))
+            }
         }
     }
 }
@@ -215,5 +256,24 @@ mod tests {
     fn parse_handles_garbage() {
         assert!(parse_manifest(b"not json").is_empty());
         assert!(parse_manifest(br#"{"nope": 1}"#).is_empty());
+    }
+
+    #[test]
+    fn http_failures_name_the_culprit() {
+        // Petdex's hosting at fault: rate limit and server errors.
+        assert!(describe_http_failure(Some(429), false).contains("rate-limited"));
+        assert!(describe_http_failure(Some(503), false).contains("HTTP 503"));
+        // Request rejected (e.g. 403 missing Referer).
+        assert!(describe_http_failure(Some(403), false).contains("HTTP 403"));
+        // User's connection at fault.
+        assert!(describe_http_failure(None, true).contains("internet connection"));
+        // Unknown network failure.
+        assert!(describe_http_failure(None, false).contains("Network error"));
+    }
+
+    #[test]
+    fn friendly_error_falls_through_for_non_network_errors() {
+        let e = serde_json::from_slice::<PackMeta>(b"not json").err().unwrap();
+        assert!(friendly_error(&e).starts_with("Download failed:"));
     }
 }
