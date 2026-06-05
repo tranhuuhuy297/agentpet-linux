@@ -1,3 +1,4 @@
-//! Linux platform integration (launch-at-login; self-update lands in Phase 7).
+//! Linux platform integration: launch-at-login and self-update.
 
 pub mod autostart;
+pub mod update;

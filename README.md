@@ -6,8 +6,9 @@ Codex, Gemini CLI, Cursor, opencode, Windsurf) running in parallel and see — a
 a glance — which one is **working**, which is **done**, and which is **waiting
 for your input**, via a tray monitor and an ambient desktop pet.
 
-> Status: **early WIP.** The pure domain logic (`agentpet-core`) is implemented
-> and tested; the GTK/tray/pet platform layer is being built next.
+> Status: **working.** Core logic, CLI/daemon, the GTK pet + monitor + settings,
+> the Petdex gallery, notifications, and packaging are all implemented and
+> validated on GNOME Wayland (via XWayland).
 
 ## How it works
 
@@ -39,18 +40,54 @@ are set via raw X11 (`x11rb`) on the window XID, since GTK4 removed those WM
 hints. The tray uses **StatusNotifierItem** (`ksni`) and requires the GNOME
 **AppIndicator** extension.
 
+## Install
+
+Install the build dependencies (Ubuntu 22.04+):
+
+```bash
+sudo apt update && sudo apt install -y \
+  libgtk-4-dev libadwaita-1-dev build-essential pkg-config \
+  libasound2-dev libx11-dev libxcb1-dev
+```
+
+Then build + install for your user (no root):
+
+```bash
+./scripts/install.sh        # builds release, installs to ~/.local
+```
+
+Launch **AgentPet** from your app menu, or run `agentpet`. On first launch it
+opens Settings — flip on the agents you use (writes their hook configs) and pick
+a pet from the gallery.
+
+- **Tray icon** needs the GNOME *AppIndicator and KStatusNotifierItem Support*
+  extension. Without it the app still runs; reach Settings/Quit from the monitor
+  window (right-click the pet).
+- **Portable build:** `./scripts/build-appimage.sh` produces an AppImage that
+  bundles GTK4/libadwaita for older distros.
+- **Update:** `agentpet update` pulls the latest GitHub release.
+
+## Usage
+
+- **Claude Code, Codex, Gemini, Cursor, opencode, Windsurf:** toggle them on in
+  Settings → General (installs the hook). The pet then reflects each session's
+  real state, including "waiting for input".
+- **Any other CLI agent:** `agentpet run -- <command>` (e.g. `agentpet run -- aider`).
+
 ## Workspace layout
 
 ```
 crates/
   agentpet-core/   # pure, GTK-free, unit-tested domain logic
-  agentpet/        # platform binary (GTK4/X11/tray/IPC) — added in a later phase
+  agentpet/        # platform binary: clap-free dispatch, tokio IPC daemon,
+                   # GTK pet/monitor/settings, ksni tray, Petdex client
+  pet-spike/       # Phase-0 click-through window feasibility spike
 ```
 
 Run the core test suite (no display server needed):
 
 ```bash
-cargo test -p agentpet-core
+cargo test -p agentpet-core -p agentpet
 ```
 
 ## License

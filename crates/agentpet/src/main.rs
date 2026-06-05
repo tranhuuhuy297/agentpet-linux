@@ -17,20 +17,17 @@ mod daemon;
 mod gui;
 mod notify;
 mod pet;
+mod petdex;
+mod platform;
 mod snapshot;
 mod ui;
-// Scaffolding for upcoming GUI phases (gallery, launch-at-login); wired into the
-// runtime once those phases land.
-#[allow(dead_code)]
-mod petdex;
-#[allow(dead_code)]
-mod platform;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("hook") => cli::hook::run(&args[1..]),
         Some("run") => cli::run::run(&args[1..]),
+        Some("update") => platform::update::run(),
         Some("--version") | Some("-v") => {
             println!("agentpet {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -52,7 +49,8 @@ fn print_usage() {
          USAGE:\n  \
          agentpet                         start the daemon (monitor)\n  \
          agentpet hook [flags]            report one agent event (called from hooks)\n  \
-         agentpet run [flags] -- <cmd>    wrap any command, reporting working/done\n\n\
+         agentpet run [flags] -- <cmd>    wrap any command, reporting working/done\n  \
+         agentpet update                  update to the latest release\n\n\
          hook flags: --event <name> --session <id> [--project <path>] [--agent <kind>] [--message <text>]\n\
          run  flags: [--session <id>] [--project <path>] [--agent <kind>]",
         env!("CARGO_PKG_VERSION")

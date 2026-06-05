@@ -41,6 +41,8 @@ pub struct RemotePet {
     pub slug: String,
     #[serde(rename = "displayName")]
     pub display_name: Option<String>,
+    /// Petdex category (character/creature/object); retained for a future filter.
+    #[allow(dead_code)]
     pub kind: Option<String>,
     #[serde(rename = "submittedBy")]
     pub submitted_by: Option<String>,

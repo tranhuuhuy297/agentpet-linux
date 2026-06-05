@@ -35,6 +35,8 @@ ksni = { version = "0.3", features = ["blocking"] }
 async-channel = "2"
 # Decode pet spritesheets / composite the tray count badge.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# `agentpet update` — self-update from GitHub Releases (rustls, no OpenSSL).
+self_update = { version = "0.41", default-features = false, features = ["rustls", "archive-tar", "compression-flate2"] }
 
 [dev-dependencies]
 tempfile = "3"

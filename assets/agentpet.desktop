@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AgentPet
+GenericName=AI Agent Monitor
+Comment=Watch your AI coding agents with a tray monitor and desktop pet
+Exec=agentpet
+Icon=agentpet
+Terminal=false
+Categories=Utility;Development;
+Keywords=agent;claude;codex;monitor;pet;
+StartupNotify=false
