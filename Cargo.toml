@@ -1,0 +1,12 @@
+# AgentPet for Linux — Cargo workspace.
+# `agentpet-core` is the pure, GTK-free, unit-testable domain logic (ports the
+# macOS `AgentPetCore` target). The platform binary `agentpet` is added in a
+# later phase and depends on this crate.
+[workspace]
+resolver = "2"
+members = ["crates/agentpet-core", "crates/agentpet"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/tranhuuhuy297/agentpet-linux"

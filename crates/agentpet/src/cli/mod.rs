@@ -1,0 +1,43 @@
+//! CLI subcommands: the fast `hook` event sender and the `run` wrapper.
+
+pub mod hook;
+pub mod run;
+
+use agentpet_core::event::AgentEvent;
+use agentpet_core::ipc;
+use std::io::Write;
+use std::os::unix::net::UnixStream;
+
+/// Sends an event to the daemon over the Unix socket, falling back to a queue
+/// file when the daemon is down so no event is lost. Ports `EventSender.swift`.
+pub fn send_event(event: &AgentEvent) {
+    let Ok(line) = ipc::encode_line(event) else {
+        return;
+    };
+    if write_to_socket(&line).is_ok() {
+        return;
+    }
+    write_to_queue(&line);
+}
+
+fn write_to_socket(line: &[u8]) -> std::io::Result<()> {
+    let mut stream = UnixStream::connect(ipc::socket_path())?;
+    stream.write_all(line)
+}
+
+fn write_to_queue(line: &[u8]) {
+    let dir = ipc::queue_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let name = ipc::queue_file_name(crate::unix_now() as i64, &unique_token());
+    let _ = std::fs::write(dir.join(name), line);
+}
+
+/// A process-unique token for queue-file names (we avoid a uuid dependency;
+/// uniqueness within a directory is all that's required).
+pub fn unique_token() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("{}-{}", std::process::id(), nanos)
+}

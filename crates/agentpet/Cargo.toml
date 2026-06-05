@@ -1,0 +1,20 @@
+[package]
+name = "agentpet"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "AgentPet for Linux — monitor multiple AI coding agents with a tray monitor and desktop pet."
+
+[[bin]]
+name = "agentpet"
+path = "src/main.rs"
+
+[dependencies]
+agentpet-core = { path = "../agentpet-core" }
+# Async Unix-socket server for the daemon. The GTK/tray/pet layers are added in
+# later phases; this crate stays GTK-free until then so it builds with no system
+# deps beyond libc.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "macros"] }
+# SIG_IGN for the run-wrapper so the child owns the terminal signals.
+libc = "0.2"
