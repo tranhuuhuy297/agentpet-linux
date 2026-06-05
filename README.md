@@ -53,7 +53,7 @@ sudo apt update && sudo apt install -y \
 Then build + install for your user (no root):
 
 ```bash
-./scripts/install.sh        # builds release, installs to ~/.local
+./install.sh        # builds release, installs to ~/.local
 ```
 
 Launch **AgentPet** from your app menu, or run `agentpet`. On first launch it
@@ -66,6 +66,17 @@ a pet from the gallery.
 - **Portable build:** `./scripts/build-appimage.sh` produces an AppImage that
   bundles GTK4/libadwaita for older distros.
 - **Update:** `agentpet update` pulls the latest GitHub release.
+
+### Uninstall
+
+```bash
+./uninstall.sh              # or: ./install.sh uninstall
+```
+
+The exact inverse of install: `agentpet uninstall` strips AgentPet's own hook
+entries from every agent config (foreign hooks untouched) and disables
+launch-at-login; then the three installed files and `~/.agentpet` are removed.
+Pass `--keep-data` to preserve `~/.agentpet` (queue + downloaded pets).
 
 ## Usage
 
@@ -89,6 +100,13 @@ Run the core test suite (no display server needed):
 ```bash
 cargo test -p agentpet-core -p agentpet
 ```
+
+## Credits
+
+This project is a Linux port of [AgentPet](https://github.com/ntd4996/agentpet)
+by [@ntd4996](https://github.com/ntd4996) — the original macOS app that defined
+the concept, agent hook integrations, and pet/monitor UX. All credit for the
+original idea and design goes to that project.
 
 ## License
 

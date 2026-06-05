@@ -2,6 +2,7 @@
 
 pub mod hook;
 pub mod run;
+pub mod uninstall;
 
 use agentpet_core::event::AgentEvent;
 use agentpet_core::ipc;
