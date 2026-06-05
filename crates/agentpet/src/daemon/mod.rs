@@ -81,10 +81,12 @@ async fn handle_client(mut stream: UnixStream, store: Store) {
         // A session-end event removes the session (apply returns None for it),
         // so treat it as a change too — otherwise removals never refresh.
         let ended = StateMapper::is_session_end(ev.agent_kind, &ev.event_name);
+        let before = store.lock().unwrap().session(&ev.session_id).map(|s| s.state);
         let updated = store.lock().unwrap().apply(ev, crate::unix_now());
         match updated {
             Some(s) => {
                 println!("• {:<10} {:<20} ({})", state_label(&s), short_project(&s), ev.event_name);
+                crate::notify::on_transition(before, &s);
                 changed = true;
             }
             None if ended => {

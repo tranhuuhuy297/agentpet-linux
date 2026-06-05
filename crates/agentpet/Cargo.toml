@@ -18,3 +18,12 @@ agentpet-core = { path = "../agentpet-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "macros"] }
 # SIG_IGN for the run-wrapper so the child owns the terminal signals.
 libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Petdex gallery downloads. rustls (no OpenSSL) keeps the build self-contained.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# Desktop notifications over org.freedesktop.Notifications (pure-Rust zbus).
+notify-rust = "4"
+
+[dev-dependencies]
+tempfile = "3"

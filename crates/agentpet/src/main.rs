@@ -14,6 +14,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod cli;
 mod daemon;
+mod notify;
+// Scaffolding for upcoming GUI phases (gallery, launch-at-login); wired into the
+// runtime once the GTK layer lands.
+#[allow(dead_code)]
+mod petdex;
+#[allow(dead_code)]
+mod platform;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

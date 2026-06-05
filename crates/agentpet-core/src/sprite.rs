@@ -9,6 +9,7 @@ use crate::state::PetMood;
 use image::RgbaImage;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// `pet.json` — the Petdex/Codex pet-pack manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -128,6 +129,42 @@ fn crop(image: &RgbaImage, x: usize, y: usize, w: usize, h: usize) -> RgbaImage 
     out
 }
 
+/// A loaded pet pack: its manifest plus the sliced animation clips. Mirrors the
+/// macOS `ImagePetPack` (one clip per sheet row, each a list of frames).
+#[derive(Debug, Clone)]
+pub struct PetPack {
+    pub manifest: PetManifest,
+    pub clips: Vec<Vec<RgbaImage>>,
+    pub dir: PathBuf,
+}
+
+impl PetPack {
+    pub fn clip_count(&self) -> usize {
+        self.clips.len()
+    }
+
+    /// Frames of the clip at `index`, clamped into range.
+    pub fn clip(&self, index: usize) -> &[RgbaImage] {
+        if self.clips.is_empty() {
+            return &[];
+        }
+        &self.clips[index.min(self.clips.len() - 1)]
+    }
+}
+
+/// Loads a pet pack directory (`pet.json` + spritesheet) and slices it. Mirrors
+/// `SpriteSlicer.loadPack`. Returns `None` if the manifest/sheet is missing or
+/// nothing sliced.
+pub fn load_pack(dir: &Path) -> Option<PetPack> {
+    let manifest = PetManifest::decode(&std::fs::read(dir.join("pet.json")).ok()?)?;
+    let sheet = image::open(dir.join(&manifest.spritesheet_path)).ok()?.to_rgba8();
+    let clips = slice(&sheet, 16);
+    if clips.is_empty() {
+        return None;
+    }
+    Some(PetPack { manifest, clips, dir: dir.to_path_buf() })
+}
+
 /// Maps each pet mood to a clip index of an imported sprite pet. Ports
 /// `PetBindings.swift`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -220,5 +257,27 @@ mod tests {
         assert_eq!(m.display_name, "Boba");
         assert_eq!(m.spritesheet_path, "sheet.png");
         assert_eq!(m.description, None);
+    }
+
+    #[test]
+    fn load_pack_reads_manifest_and_slices_sheet() {
+        let dir = tempfile::tempdir().unwrap();
+        grid_sheet(2, 3, 8, 2).save(dir.path().join("sheet.png")).unwrap();
+        std::fs::write(
+            dir.path().join("pet.json"),
+            br#"{"id":"boba","displayName":"Boba","spritesheetPath":"sheet.png"}"#,
+        )
+        .unwrap();
+
+        let pack = load_pack(dir.path()).expect("pack loads");
+        assert_eq!(pack.manifest.id, "boba");
+        assert_eq!(pack.clip_count(), 2, "2 row bands → 2 clips");
+        assert_eq!(pack.clip(0).len(), 3, "3 col bands → 3 frames");
+    }
+
+    #[test]
+    fn load_pack_missing_manifest_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_pack(dir.path()).is_none());
     }
 }

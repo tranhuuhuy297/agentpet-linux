@@ -4,7 +4,7 @@
 # later phase and depends on this crate.
 [workspace]
 resolver = "2"
-members = ["crates/agentpet-core", "crates/agentpet"]
+members = ["crates/agentpet-core", "crates/agentpet", "crates/pet-spike"]
 
 [workspace.package]
 edition = "2021"
