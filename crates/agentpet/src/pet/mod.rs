@@ -46,6 +46,9 @@ impl PetWindow {
             .decorated(false)
             .resizable(false)
             .build();
+        // Scope transparency to the pet alone — a display-wide rule would make
+        // the Settings/Monitor windows transparent too.
+        window.add_css_class("agentpet-pet");
 
         install_transparent_css();
 
@@ -119,7 +122,7 @@ impl PetWindow {
 
 fn install_transparent_css() {
     let provider = CssProvider::new();
-    provider.load_from_data("window, .background { background: transparent; }");
+    provider.load_from_data("window.agentpet-pet { background-color: transparent; }");
     if let Some(display) = gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(
             &display,

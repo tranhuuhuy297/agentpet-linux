@@ -2,10 +2,11 @@
 //! `UiUpdate` to them. Lives entirely on the GTK main thread.
 
 pub mod monitor;
+pub mod settings;
 pub mod tray;
 
 use crate::pet::PetWindow;
-use crate::snapshot::{UiCommand, UiUpdate};
+use crate::snapshot::{GalleryRequest, GalleryResult, UiCommand, UiUpdate};
 use agentpet_core::config::Config;
 use agentpet_core::sprite::{load_pack, PetPack};
 use gtk4::gio;
@@ -14,6 +15,7 @@ use gtk4::prelude::*;
 pub struct Ui {
     pet: PetWindow,
     monitor: monitor::MonitorWindow,
+    settings: settings::SettingsWindow,
     tray: Option<ksni::blocking::Handle<tray::AgentTray>>,
     // Keeps the GtkApplication alive even when no window is visible (the pet is
     // always present, but this guards against it being closed).
@@ -21,12 +23,25 @@ pub struct Ui {
 }
 
 impl Ui {
-    pub fn build(app: &gtk4::Application, cmd: async_channel::Sender<UiCommand>) -> Self {
+    pub fn build(
+        app: &gtk4::Application,
+        cmd: async_channel::Sender<UiCommand>,
+        gallery_tx: async_channel::Sender<GalleryRequest>,
+    ) -> Self {
         let hold = app.hold();
         let pet = PetWindow::new(app, cmd.clone());
-        let monitor = monitor::MonitorWindow::new(app);
+        let monitor = monitor::MonitorWindow::new(app, cmd.clone());
+        let settings = settings::SettingsWindow::new(app, gallery_tx);
         let tray = tray::spawn(cmd);
-        Ui { pet, monitor, tray, _hold: hold }
+        Ui { pet, monitor, settings, tray, _hold: hold }
+    }
+
+    pub fn show_settings(&self) {
+        self.settings.show();
+    }
+
+    pub fn apply_gallery_result(&self, result: GalleryResult) {
+        self.settings.apply_gallery_result(result);
     }
 
     pub fn apply(&self, update: &UiUpdate) {

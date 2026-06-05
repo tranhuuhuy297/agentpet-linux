@@ -1,54 +1,69 @@
-//! Desktop notifications on agent state transitions. Ports the notification
-//! half of `NotificationManager.swift` / `AppDaemon.notifyIfNeeded`.
+//! Desktop notifications (with a sound hint) on agent state transitions. Ports
+//! `NotificationManager.swift` + `SoundSettings.swift`.
 //!
-//! Sound is intentionally deferred to the GTK phase (it needs `libasound2-dev`
-//! via `rodio`, installed alongside the GUI deps).
+//! notify-rust's `show()` is blocking and uses zbus-blocking internally, which
+//! panics ("runtime within a runtime") if called on a tokio worker thread. So we
+//! run all notifications on a dedicated plain OS thread, fed by this channel.
+//! Sound is delegated to the notification daemon via the freedesktop sound
+//! hint, avoiding an audio dependency.
 
+use agentpet_core::config::Config;
 use agentpet_core::session::AgentSession;
 use agentpet_core::state::AgentState;
 use std::sync::mpsc;
 use std::sync::OnceLock;
 
-/// notify-rust's `show()` is blocking and uses zbus-blocking internally, which
-/// panics ("runtime within a runtime") if called on a tokio worker thread. So we
-/// run all notifications on a dedicated plain OS thread, fed by this channel.
-static NOTIFIER: OnceLock<mpsc::Sender<(String, String)>> = OnceLock::new();
+struct Note {
+    title: String,
+    body: String,
+    sound: Option<&'static str>,
+}
+
+static NOTIFIER: OnceLock<mpsc::Sender<Note>> = OnceLock::new();
 
 /// Starts the notification worker thread. Call once at daemon startup.
 pub fn init() {
-    let (tx, rx) = mpsc::channel::<(String, String)>();
+    let (tx, rx) = mpsc::channel::<Note>();
     std::thread::spawn(move || {
-        while let Ok((title, body)) = rx.recv() {
-            match notify_rust::Notification::new()
-                .summary(&title)
-                .body(&body)
-                .appname("AgentPet")
-                .show()
-            {
-                Ok(_) => {}
-                Err(e) => eprintln!("agentpet: notification failed: {e}"),
+        while let Ok(note) = rx.recv() {
+            let mut n = notify_rust::Notification::new();
+            n.summary(&note.title).body(&note.body).appname("AgentPet");
+            if let Some(sound) = note.sound {
+                n.sound_name(sound);
+            }
+            if let Err(e) = n.show() {
+                eprintln!("agentpet: notification failed: {e}");
             }
         }
     });
     let _ = NOTIFIER.set(tx);
 }
 
-/// Posts a notification when a session transitions into `waiting` or `done`.
-/// `before` is the session's prior state (`None` if it's brand new).
+/// Posts a notification when a session transitions into `waiting` or `done`,
+/// with a sound hint when the corresponding sound is enabled in config.
 pub fn on_transition(before: Option<AgentState>, session: &AgentSession) {
     if Some(session.state) == before {
         return;
     }
+    let cfg = Config::load();
     match session.state {
-        AgentState::Waiting => notify(
-            &format!("{} needs input", project_label(session)),
-            session.message.as_deref().unwrap_or("Waiting for you"),
+        AgentState::Waiting => send(
+            format!("{} needs input", project_label(session)),
+            session.message.clone().unwrap_or_else(|| "Waiting for you".into()),
+            cfg.sound_waiting_on.then_some("message"),
         ),
-        AgentState::Done => notify(
-            &format!("{} finished", project_label(session)),
-            "Agent completed its turn",
+        AgentState::Done => send(
+            format!("{} finished", project_label(session)),
+            "Agent completed its turn".into(),
+            cfg.sound_done_on.then_some("complete"),
         ),
         _ => {}
+    }
+}
+
+fn send(title: String, body: String, sound: Option<&'static str>) {
+    if let Some(tx) = NOTIFIER.get() {
+        let _ = tx.send(Note { title, body, sound });
     }
 }
 
@@ -64,14 +79,6 @@ fn project_label(session: &AgentSession) -> String {
                 .unwrap_or_else(|| p.to_string())
         })
         .unwrap_or_else(|| session.id.clone())
-}
-
-/// Queues a desktop notification on the worker thread. No-op if `init()` wasn't
-/// called (e.g. in tests); a missing notification daemon is non-fatal.
-pub fn notify(title: &str, body: &str) {
-    if let Some(tx) = NOTIFIER.get() {
-        let _ = tx.send((title.to_string(), body.to_string()));
-    }
 }
 
 #[cfg(test)]

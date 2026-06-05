@@ -1,10 +1,14 @@
 //! The monitor window: a live list of agent sessions with a status dot, project,
 //! current activity, and a per-state elapsed timer. Ports `MenuBarContentView`.
 
+use crate::snapshot::UiCommand;
 use agentpet_core::session::AgentSession;
 use agentpet_core::state::AgentState;
 use gtk4::prelude::*;
-use gtk4::{Application, ApplicationWindow, Label, ListBox, PolicyType, ScrolledWindow};
+use gtk4::{
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, Label, ListBox, Orientation,
+    PolicyType, ScrolledWindow,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -15,12 +19,12 @@ pub struct MonitorWindow {
 }
 
 impl MonitorWindow {
-    pub fn new(app: &Application) -> Self {
+    pub fn new(app: &Application, cmd: async_channel::Sender<UiCommand>) -> Self {
         let window = ApplicationWindow::builder()
             .application(app)
             .title("AgentPet — Monitor")
             .default_width(380)
-            .default_height(440)
+            .default_height(460)
             .build();
         window.set_hide_on_close(true); // closing hides; the app keeps running
 
@@ -28,8 +32,44 @@ impl MonitorWindow {
         list.set_selection_mode(gtk4::SelectionMode::None);
         let scrolled = ScrolledWindow::new();
         scrolled.set_policy(PolicyType::Never, PolicyType::Automatic);
+        scrolled.set_vexpand(true);
         scrolled.set_child(Some(&list));
-        window.set_child(Some(&scrolled));
+
+        // Footer with Settings / Quit (the primary access point when there's no
+        // tray, e.g. GNOME without the AppIndicator extension).
+        let footer = GtkBox::new(Orientation::Horizontal, 8);
+        footer.set_margin_top(8);
+        footer.set_margin_bottom(8);
+        footer.set_margin_start(10);
+        footer.set_margin_end(10);
+        let spacer = GtkBox::new(Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        let settings_btn = Button::with_label("Settings");
+        let quit_btn = Button::with_label("Quit");
+        quit_btn.add_css_class("destructive-action");
+        for b in [&settings_btn, &quit_btn] {
+            b.set_valign(Align::Center);
+        }
+        {
+            let cmd = cmd.clone();
+            settings_btn.connect_clicked(move |_| {
+                let _ = cmd.try_send(UiCommand::OpenSettings);
+            });
+        }
+        {
+            let cmd = cmd.clone();
+            quit_btn.connect_clicked(move |_| {
+                let _ = cmd.try_send(UiCommand::Quit);
+            });
+        }
+        footer.append(&spacer);
+        footer.append(&settings_btn);
+        footer.append(&quit_btn);
+
+        let root = GtkBox::new(Orientation::Vertical, 0);
+        root.append(&scrolled);
+        root.append(&footer);
+        window.set_child(Some(&root));
 
         let sessions = Rc::new(RefCell::new(Vec::<AgentSession>::new()));
 

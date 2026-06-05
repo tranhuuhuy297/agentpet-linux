@@ -118,6 +118,41 @@ pub fn pets_dir() -> PathBuf {
     ipc::base_dir().join("pets")
 }
 
+/// Services gallery requests on the tokio runtime: fetches the manifest and
+/// downloads packs, reporting results back to the GTK side. On a successful
+/// download it selects the pack and signals a pet reload.
+pub async fn gallery_worker(
+    rx: async_channel::Receiver<crate::snapshot::GalleryRequest>,
+    tx: async_channel::Sender<crate::snapshot::GalleryResult>,
+    reload: async_channel::Sender<()>,
+) {
+    use crate::snapshot::{GalleryRequest, GalleryResult};
+    while let Ok(req) = rx.recv().await {
+        match req {
+            GalleryRequest::Fetch => {
+                let result = match fetch_manifest().await {
+                    Ok(pets) => GalleryResult::Manifest(pets),
+                    Err(e) => GalleryResult::Failed(e.to_string()),
+                };
+                let _ = tx.send(result).await;
+            }
+            GalleryRequest::Download(pet) => {
+                let result = match download(&pet).await {
+                    Ok(id) => {
+                        let mut cfg = agentpet_core::config::Config::load();
+                        cfg.selected_pet_id = Some(id.clone());
+                        let _ = cfg.save();
+                        let _ = reload.send(()).await;
+                        GalleryResult::Downloaded(id)
+                    }
+                    Err(e) => GalleryResult::Failed(e.to_string()),
+                };
+                let _ = tx.send(result).await;
+            }
+        }
+    }
+}
+
 /// True if at least one pet pack is already installed.
 pub fn has_installed_pack() -> bool {
     std::fs::read_dir(pets_dir())
