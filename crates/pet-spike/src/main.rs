@@ -24,10 +24,16 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use x11rb::connection::Connection;
-use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
+// Three distinct `ConnectionExt` traits, named explicitly:
+//  - xproto:  raw requests (intern_atom, configure_window, translate_coordinates)
+//  - wrapper: typed property helpers (change_property32)
+//  - shape:   the Shape extension (shape_rectangles → click-through input region)
+use x11rb::protocol::shape::{ConnectionExt as ShapeConnectionExt, SK, SO};
 use x11rb::protocol::xproto::{
-    AtomEnum, ClipOrdering, ConfigureWindowAux, ConnectionExt as _, PropMode,
+    AtomEnum, ClientMessageData, ClientMessageEvent, ClipOrdering, ConfigureWindowAux,
+    ConnectionExt, EventMask, PropMode,
 };
+use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
 const APP_ID: &str = "online.thenightwatcher.agentpet.PetSpike";
 const SIZE: i32 = 180;
@@ -111,7 +117,49 @@ fn build_window(app: &Application, click_through: bool) {
         }
     });
 
+    // Re-assert keep-above once the window is actually mapped (and again on every
+    // remap). Mutter only honours `_NET_WM_STATE_ABOVE` via a root client message
+    // on a managed window — a direct property write is ignored, which is why the
+    // window otherwise slips behind a newly-focused app.
+    window.connect_map(|win| {
+        if let Some(xid) = window_xid(win) {
+            if let Err(e) = assert_keep_above(xid) {
+                eprintln!("pet-spike: keep-above client message failed: {e}");
+            }
+        }
+    });
+
     window.present();
+}
+
+/// Sends EWMH `_NET_WM_STATE` ADD client messages to the root for ABOVE +
+/// skip-taskbar/pager. This is the WM-honoured way to keep a managed window on
+/// top (unlike a direct property write).
+fn assert_keep_above(window: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let (conn, screen_num) = x11rb::connect(None)?;
+    let root = conn.setup().roots[screen_num].root;
+
+    let net_wm_state = intern(&conn, b"_NET_WM_STATE")?;
+    let above = intern(&conn, b"_NET_WM_STATE_ABOVE")?;
+    let skip_taskbar = intern(&conn, b"_NET_WM_STATE_SKIP_TASKBAR")?;
+    let skip_pager = intern(&conn, b"_NET_WM_STATE_SKIP_PAGER")?;
+
+    const ADD: u32 = 1; // _NET_WM_STATE_ADD
+    const SOURCE_APP: u32 = 1; // normal application
+
+    // A client message carries up to two property atoms (data[1], data[2]).
+    for (a, b) in [(above, skip_taskbar), (skip_pager, 0)] {
+        let data = ClientMessageData::from([ADD, a, b, SOURCE_APP, 0]);
+        let event = ClientMessageEvent::new(32, window, net_wm_state, data);
+        conn.send_event(
+            false,
+            root,
+            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+            event,
+        )?;
+    }
+    conn.flush()?;
+    Ok(())
 }
 
 /// Draws a bobbing two-tone blob centred in the widget, with transparent margins
