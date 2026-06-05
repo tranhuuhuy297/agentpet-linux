@@ -12,6 +12,28 @@ use std::path::PathBuf;
 pub const MANIFEST_URL: &str = "https://petdex.crafter.run/api/manifest";
 /// Preferred first-run starter pet (a non-franchise original); falls back to any.
 pub const STARTER_SLUG: &str = "boba";
+/// The asset CDN gates downloads on this Referer (returns 403 otherwise).
+const ASSET_REFERER: &str = "https://petdex.crafter.run/";
+const USER_AGENT: &str = concat!("AgentPet/", env!("CARGO_PKG_VERSION"));
+
+/// Shared HTTP client carrying our user-agent.
+fn client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .build()
+        .unwrap_or_default()
+}
+
+/// GETs a URL with the Referer the Petdex CDN requires.
+async fn get_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, reqwest::Error> {
+    let resp = client
+        .get(url)
+        .header(reqwest::header::REFERER, ASSET_REFERER)
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(resp.bytes().await?.to_vec())
+}
 
 /// One entry in the Petdex manifest (only the fields we use).
 #[derive(Debug, Clone, Deserialize)]
@@ -54,7 +76,7 @@ pub fn parse_manifest(bytes: &[u8]) -> Vec<RemotePet> {
 
 /// Fetches and parses the live manifest.
 pub async fn fetch_manifest() -> Result<Vec<RemotePet>, reqwest::Error> {
-    let bytes = reqwest::get(MANIFEST_URL).await?.bytes().await?;
+    let bytes = get_bytes(&client(), MANIFEST_URL).await?;
     Ok(parse_manifest(&bytes))
 }
 
@@ -72,19 +94,61 @@ pub async fn download(pet: &RemotePet) -> Result<String, Box<dyn std::error::Err
     let dir = pets_dir().join(&pet.slug);
     std::fs::create_dir_all(&dir)?;
 
-    let pet_json = reqwest::get(&pet.pet_json_url).await?.bytes().await?;
-    let meta: PackMeta = serde_json::from_slice(&pet_json)?;
-    std::fs::write(dir.join("pet.json"), &pet_json)?;
+    // Fetch first, write second — so a failed download never leaves a partial
+    // pack on disk.
+    let http = client();
+    let result = async {
+        let pet_json = get_bytes(&http, &pet.pet_json_url).await?;
+        let meta: PackMeta = serde_json::from_slice(&pet_json)?;
+        let sheet = get_bytes(&http, &pet.spritesheet_url).await?;
+        std::fs::write(dir.join("pet.json"), &pet_json)?;
+        std::fs::write(dir.join(&meta.spritesheet_path), &sheet)?;
+        Ok::<String, Box<dyn std::error::Error + Send + Sync>>(meta.id.unwrap_or_else(|| pet.slug.clone()))
+    }
+    .await;
 
-    let sheet = reqwest::get(&pet.spritesheet_url).await?.bytes().await?;
-    std::fs::write(dir.join(&meta.spritesheet_path), &sheet)?;
-
-    Ok(meta.id.unwrap_or_else(|| pet.slug.clone()))
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&dir); // clean up the empty/partial dir
+    }
+    result
 }
 
 /// `~/.agentpet/pets`.
 pub fn pets_dir() -> PathBuf {
     ipc::base_dir().join("pets")
+}
+
+/// True if at least one pet pack is already installed.
+pub fn has_installed_pack() -> bool {
+    std::fs::read_dir(pets_dir())
+        .map(|rd| rd.flatten().any(|e| e.path().join("pet.json").exists()))
+        .unwrap_or(false)
+}
+
+/// On first launch (no pack installed), downloads the starter pet and selects
+/// it. Always signals `reload` so the GTK side loads whatever is present.
+/// Network failures are non-fatal (the blob fallback keeps the pet visible).
+pub async fn bootstrap_if_needed(reload: async_channel::Sender<()>) {
+    if has_installed_pack() {
+        let _ = reload.send(()).await;
+        return;
+    }
+    let Ok(pets) = fetch_manifest().await else {
+        return;
+    };
+    let pick = pets.iter().find(|p| p.slug == STARTER_SLUG).or_else(|| pets.first());
+    if let Some(pet) = pick {
+        match download(pet).await {
+            Ok(id) => {
+                let mut cfg = agentpet_core::config::Config::load();
+                cfg.selected_pet_id = Some(id);
+                let _ = cfg.save();
+                let _ = reload.send(()).await;
+                eprintln!("agentpet: installed starter pet '{}'", pet.slug);
+            }
+            Err(e) => eprintln!("agentpet: starter pet download failed: {e}"),
+        }
+    }
 }
 
 #[cfg(test)]

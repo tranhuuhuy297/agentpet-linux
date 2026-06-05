@@ -24,6 +24,17 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 # Desktop notifications over org.freedesktop.Notifications (pure-Rust zbus).
 notify-rust = "4"
+# GUI: GTK4 windows + the floating pet (via XWayland, per the Phase-0 spike).
+gtk4 = { version = "0.9", features = ["v4_6"] }
+gdk4-x11 = "0.9"
+x11rb = { version = "0.13", features = ["shape"] }
+# StatusNotifierItem tray (needs the GNOME AppIndicator extension at runtime).
+# 0.3 uses pure-Rust zbus (no system libdbus-1-dev); `blocking` gives a sync API.
+ksni = { version = "0.3", features = ["blocking"] }
+# Bridge socket-server events from the tokio thread to the GTK main thread.
+async-channel = "2"
+# Decode pet spritesheets / composite the tray count badge.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 tempfile = "3"

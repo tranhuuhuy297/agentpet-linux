@@ -1,14 +1,16 @@
-//! The monitor daemon: owns the live `SessionStore`, drains any events queued
-//! while it was down, listens on the Unix socket, and prunes stale sessions on
-//! a timer. Ports `AppDaemon.swift` + `EventSocketServer.swift`.
+//! The monitor daemon: owns the live `SessionStore`, drains events queued while
+//! it was down, listens on the Unix socket, prunes stale sessions on a timer,
+//! and (when a `sink` is provided) ships a `UiUpdate` snapshot to the GTK thread
+//! on every change. Ports `AppDaemon.swift` + `EventSocketServer.swift`.
 //!
-//! For now it runs *headless* (logs state to stdout). Later phases attach the
-//! GTK tray/monitor/pet by reusing this socket server and forwarding session
-//! snapshots over an `async-channel` to the GTK main thread.
+//! With `sink = None` it runs headless (logs to stderr) — useful for testing
+//! without a display.
 
+use crate::snapshot::UiUpdate;
 use agentpet_core::ipc;
 use agentpet_core::mapper::StateMapper;
 use agentpet_core::session::{AgentSession, SessionStore};
+use async_channel::Sender;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,27 +18,34 @@ use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
 
 type Store = Arc<Mutex<SessionStore>>;
+type Sink = Option<Sender<UiUpdate>>;
 
-/// Builds a Tokio runtime and runs the daemon to completion.
+/// Runs the daemon headless (no UI) to completion on a fresh Tokio runtime.
 pub fn run_headless() -> ExitCode {
-    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
-        Ok(rt) => rt,
+    match build_runtime() {
+        Ok(rt) => rt.block_on(serve(None)),
         Err(e) => {
             eprintln!("agentpet: failed to start runtime: {e}");
-            return ExitCode::FAILURE;
+            ExitCode::FAILURE
         }
-    };
-    rt.block_on(serve())
+    }
 }
 
-async fn serve() -> ExitCode {
+pub fn build_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread().enable_all().build()
+}
+
+/// The socket server. Emits a snapshot through `sink` on every change.
+pub async fn serve(sink: Sink) -> ExitCode {
     let _ = std::fs::create_dir_all(ipc::base_dir());
+    crate::notify::init(); // notifications run on a dedicated thread, off the runtime
     let store: Store = Arc::new(Mutex::new(SessionStore::new()));
 
     // Replay queued events with their original timestamps, then prune so
     // sessions that ended while we were down look stale and don't resurrect.
     drain_queue(&store);
     store.lock().unwrap().prune(crate::unix_now());
+    emit(&store, &sink);
     log_sessions(&store);
 
     // Single-instance guard: a live daemon already answering on the socket wins.
@@ -45,7 +54,7 @@ async fn serve() -> ExitCode {
         eprintln!("agentpet: a daemon is already running ({})", sock.display());
         return ExitCode::FAILURE;
     }
-    let _ = std::fs::remove_file(&sock); // clear a stale socket file
+    let _ = std::fs::remove_file(&sock);
     let listener = match UnixListener::bind(&sock) {
         Ok(l) => l,
         Err(e) => {
@@ -55,22 +64,21 @@ async fn serve() -> ExitCode {
     };
     eprintln!("agentpet daemon listening on {}", sock.display());
 
-    spawn_prune_timer(store.clone());
+    spawn_prune_timer(store.clone(), sink.clone());
 
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let store = store.clone();
-                tokio::spawn(async move { handle_client(stream, store).await });
+                let sink = sink.clone();
+                tokio::spawn(async move { handle_client(stream, store, sink).await });
             }
             Err(e) => eprintln!("agentpet: accept error: {e}"),
         }
     }
 }
 
-/// Reads one client's full stream, decodes newline-delimited events, and applies
-/// each to the store (mirrors the daemon's per-connection handling).
-async fn handle_client(mut stream: UnixStream, store: Store) {
+async fn handle_client(mut stream: UnixStream, store: Store, sink: Sink) {
     let mut buf = Vec::new();
     if stream.read_to_end(&mut buf).await.is_err() {
         return;
@@ -78,8 +86,6 @@ async fn handle_client(mut stream: UnixStream, store: Store) {
     let events = ipc::decode_lines(&buf);
     let mut changed = false;
     for ev in &events {
-        // A session-end event removes the session (apply returns None for it),
-        // so treat it as a change too — otherwise removals never refresh.
         let ended = StateMapper::is_session_end(ev.agent_kind, &ev.event_name);
         let before = store.lock().unwrap().session(&ev.session_id).map(|s| s.state);
         let updated = store.lock().unwrap().apply(ev, crate::unix_now());
@@ -98,10 +104,11 @@ async fn handle_client(mut stream: UnixStream, store: Store) {
     }
     if changed {
         log_sessions(&store);
+        emit(&store, &sink);
     }
 }
 
-fn spawn_prune_timer(store: Store) {
+fn spawn_prune_timer(store: Store, sink: Sink) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(10));
         loop {
@@ -114,9 +121,18 @@ fn spawn_prune_timer(store: Store) {
             };
             if before != after {
                 log_sessions(&store);
+                emit(&store, &sink);
             }
         }
     });
+}
+
+/// Sends a fresh snapshot to the GTK thread (no-op when headless).
+fn emit(store: &Store, sink: &Sink) {
+    if let Some(tx) = sink {
+        let sessions = store.lock().unwrap().sorted();
+        let _ = tx.try_send(UiUpdate::from_sessions(sessions));
+    }
 }
 
 /// Drains queued event files (written while the daemon was down) in name order,

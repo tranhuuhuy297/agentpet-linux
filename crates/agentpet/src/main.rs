@@ -14,9 +14,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod cli;
 mod daemon;
+mod gui;
 mod notify;
+mod pet;
+mod snapshot;
+mod ui;
 // Scaffolding for upcoming GUI phases (gallery, launch-at-login); wired into the
-// runtime once the GTK layer lands.
+// runtime once those phases land.
 #[allow(dead_code)]
 mod petdex;
 #[allow(dead_code)]
@@ -35,7 +39,10 @@ fn main() -> ExitCode {
             print_usage();
             ExitCode::SUCCESS
         }
-        _ => daemon::run_headless(),
+        // No subcommand: run the app. `--headless` runs the daemon without a UI
+        // (for testing on machines with no display).
+        _ if args.iter().any(|a| a == "--headless") => daemon::run_headless(),
+        _ => gui::run_gui(),
     }
 }
 

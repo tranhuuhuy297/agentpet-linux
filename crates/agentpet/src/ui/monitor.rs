@@ -1,0 +1,141 @@
+//! The monitor window: a live list of agent sessions with a status dot, project,
+//! current activity, and a per-state elapsed timer. Ports `MenuBarContentView`.
+
+use agentpet_core::session::AgentSession;
+use agentpet_core::state::AgentState;
+use gtk4::prelude::*;
+use gtk4::{Application, ApplicationWindow, Label, ListBox, PolicyType, ScrolledWindow};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+pub struct MonitorWindow {
+    window: ApplicationWindow,
+    list: ListBox,
+    sessions: Rc<RefCell<Vec<AgentSession>>>,
+}
+
+impl MonitorWindow {
+    pub fn new(app: &Application) -> Self {
+        let window = ApplicationWindow::builder()
+            .application(app)
+            .title("AgentPet — Monitor")
+            .default_width(380)
+            .default_height(440)
+            .build();
+        window.set_hide_on_close(true); // closing hides; the app keeps running
+
+        let list = ListBox::new();
+        list.set_selection_mode(gtk4::SelectionMode::None);
+        let scrolled = ScrolledWindow::new();
+        scrolled.set_policy(PolicyType::Never, PolicyType::Automatic);
+        scrolled.set_child(Some(&list));
+        window.set_child(Some(&scrolled));
+
+        let sessions = Rc::new(RefCell::new(Vec::<AgentSession>::new()));
+
+        // Tick the elapsed timers once a second.
+        {
+            let (list, sessions) = (list.clone(), sessions.clone());
+            gtk4::glib::timeout_add_seconds_local(1, move || {
+                render(&list, &sessions.borrow());
+                gtk4::glib::ControlFlow::Continue
+            });
+        }
+
+        MonitorWindow { window, list, sessions }
+    }
+
+    pub fn set_sessions(&self, sessions: &[AgentSession]) {
+        *self.sessions.borrow_mut() = sessions.to_vec();
+        render(&self.list, &self.sessions.borrow());
+    }
+
+    pub fn show(&self) {
+        self.window.present();
+    }
+}
+
+fn render(list: &ListBox, sessions: &[AgentSession]) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+    if sessions.is_empty() {
+        let label = Label::new(Some("No active agents"));
+        label.set_margin_top(16);
+        label.set_margin_bottom(16);
+        label.add_css_class("dim-label");
+        list.append(&label);
+        return;
+    }
+    let now = crate::unix_now();
+    for s in sessions {
+        list.append(&row(s, now));
+    }
+}
+
+fn row(s: &AgentSession, now: f64) -> Label {
+    let project = s
+        .project
+        .as_deref()
+        .map(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.to_string())
+        })
+        .unwrap_or_else(|| s.id.clone());
+
+    let activity = s.message.clone().unwrap_or_else(|| state_word(s.state).to_string());
+    let elapsed = format_elapsed((now - s.state_since).max(0.0));
+    let dot = color_dot(s.state);
+
+    let markup = format!(
+        "<span foreground='{dot}'>●</span>  <b>{}</b>\n<span size='small' foreground='#999'>{} · {}</span>",
+        glib_escape(&project),
+        glib_escape(&activity),
+        elapsed,
+    );
+    let label = Label::new(None);
+    label.set_markup(&markup);
+    label.set_xalign(0.0);
+    label.set_margin_top(6);
+    label.set_margin_bottom(6);
+    label.set_margin_start(10);
+    label.set_margin_end(10);
+    label
+}
+
+fn state_word(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Registered => "registered",
+        AgentState::Working => "working",
+        AgentState::Waiting => "waiting for input",
+        AgentState::Done => "done",
+        AgentState::Idle => "idle",
+    }
+}
+
+fn color_dot(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Working => "#4ac6f0",
+        AgentState::Waiting => "#f0b020",
+        AgentState::Done => "#56d472",
+        AgentState::Registered => "#9aa0a6",
+        AgentState::Idle => "#666666",
+    }
+}
+
+fn format_elapsed(secs: f64) -> String {
+    let s = secs as u64;
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3600 {
+        format!("{}m {}s", s / 60, s % 60)
+    } else {
+        format!("{}h {}m", s / 3600, (s % 3600) / 60)
+    }
+}
+
+fn glib_escape(s: &str) -> String {
+    gtk4::glib::markup_escape_text(s).to_string()
+}
