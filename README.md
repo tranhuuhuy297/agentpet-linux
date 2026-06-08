@@ -42,18 +42,12 @@ hints. The tray uses **StatusNotifierItem** (`ksni`) and requires the GNOME
 
 ## Install
 
-Install the build dependencies (Ubuntu 22.04+):
+One command (Ubuntu 22.04+) — clones, installs any missing build
+dependencies, builds the release, and installs to `~/.local` (no root for the
+app itself; `sudo` is used only if GTK4 dev libraries are missing):
 
 ```bash
-sudo apt update && sudo apt install -y \
-  libgtk-4-dev libadwaita-1-dev build-essential pkg-config \
-  libasound2-dev libx11-dev libxcb1-dev
-```
-
-Then build + install for your user (no root):
-
-```bash
-./install.sh        # builds release, installs to ~/.local
+git clone https://github.com/tranhuuhuy297/agentpet-linux && cd agentpet-linux && ./install.sh
 ```
 
 Launch **AgentPet** from your app menu, or run `agentpet`. On first launch it

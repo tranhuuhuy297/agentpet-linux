@@ -43,7 +43,27 @@ stop_running_app() {
   echo "$stopped"
 }
 
+# Ensures the GTK4/X11/ALSA build dependencies are present so a single
+# `./install.sh` works from a clean machine. On apt systems it installs any that
+# are missing (needs sudo); elsewhere it lists them and lets the build surface
+# the error. Skipped entirely when GTK4 is already discoverable.
+ensure_dependencies() {
+  if command -v pkg-config >/dev/null && pkg-config --exists gtk4 2>/dev/null; then
+    return 0
+  fi
+  local pkgs="libgtk-4-dev libadwaita-1-dev build-essential pkg-config libasound2-dev libx11-dev libxcb1-dev"
+  if command -v apt-get >/dev/null; then
+    echo "==> Installing build dependencies (sudo)…"
+    sudo apt-get update && sudo apt-get install -y $pkgs
+  else
+    echo "WARNING: GTK4 dev libraries not found and this isn't an apt-based system."
+    echo "         Install the equivalents of: $pkgs"
+  fi
+}
+
 do_install() {
+  ensure_dependencies
+
   echo "==> Building release binary…"
   cargo build --release -p agentpet
 
