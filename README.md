@@ -8,7 +8,7 @@ and a desktop pet per agent (run Claude Code and Codex together and you get two
 pets, each reflecting its own state).
 
 > Status: **working.** Core logic, CLI/daemon, the GTK pet + monitor + settings,
-> the Petdex gallery, notifications, and packaging are all implemented and
+> the local Petdex pet picker, notifications, and packaging are all implemented and
 > validated on GNOME Wayland (via XWayland).
 
 ## How it works
@@ -64,7 +64,9 @@ Force either mode with `./install.sh --source` (always build) or
 
 Launch **AgentPet** from your app menu, or run `agentpet`. On first launch it
 opens Settings — flip on the agents you use (writes their hook configs) and pick
-a pet from the gallery.
+a pet on the **Pet** tab. Pets are installed with the official
+[Petdex](https://petdex.dev) CLI; the Pet tab lists what you've installed and
+lets you assign one per agent (see [Pets](#pets) below).
 
 - **Tray icon** needs the GNOME *AppIndicator and KStatusNotifierItem Support*
   extension. Without it the app still runs; reach Settings/Quit from the monitor
@@ -82,7 +84,8 @@ a pet from the gallery.
 The exact inverse of install: `agentpet uninstall` strips AgentPet's own hook
 entries from every agent config (foreign hooks untouched) and disables
 launch-at-login; then the three installed files and `~/.agentpet` are removed.
-Pass `--keep-data` to preserve `~/.agentpet` (queue + downloaded pets).
+Pass `--keep-data` to preserve `~/.agentpet` (the replay queue). Installed pets
+live in `~/.petdex/pets` (managed by the Petdex CLI) and are left untouched.
 
 ## Usage
 
@@ -90,6 +93,21 @@ Pass `--keep-data` to preserve `~/.agentpet` (queue + downloaded pets).
   hook). Each agent gets its own pet that reflects its real state, including
   "waiting for input"; pick a per-agent pet on the Settings → Pet tab.
 - **Any other CLI agent:** `agentpet run -- <command>` (e.g. `agentpet run -- aider`).
+
+## Pets
+
+AgentPet hosts no art of its own and downloads nothing — it shows the pet packs
+you install with the official [Petdex](https://petdex.dev) CLI. Browse pets at
+[petdex.dev](https://petdex.dev), then install one (or several):
+
+```bash
+npx petdex@latest install snow-plum-lillia
+```
+
+The CLI writes each pack to `~/.petdex/pets/<slug>/` (a `pet.json` + spritesheet).
+Open Settings → **Pet**, hit **Refresh**, and your installed pets appear in the
+list — assign one to each agent with **Use**. If nothing is installed yet, the
+tab shows the install command and your pets fall back to a simple coloured blob.
 
 ## Workspace layout
 

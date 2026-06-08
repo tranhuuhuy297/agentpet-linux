@@ -1,6 +1,6 @@
 [package]
 name = "agentpet"
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -20,8 +20,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Petdex gallery downloads. rustls (no OpenSSL) keeps the build self-contained.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 # Desktop notifications over org.freedesktop.Notifications (pure-Rust zbus).
 notify-rust = "4"
 # GUI: GTK4 windows + the floating pet (via XWayland, per the Phase-0 spike).
@@ -33,8 +31,9 @@ x11rb = { version = "0.13", features = ["shape"] }
 ksni = { version = "0.3", features = ["blocking"] }
 # Bridge socket-server events from the tokio thread to the GTK main thread.
 async-channel = "2"
-# Decode pet spritesheets / composite the tray count badge.
-image = { version = "0.25", default-features = false, features = ["png"] }
+# Decode pet spritesheets (Petdex packs ship WebP; PNG for the tray badge).
+# Both decoders are pure-Rust, so the build stays self-contained.
+image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 # `agentpet update` — self-update from GitHub Releases (rustls, no OpenSSL).
 self_update = { version = "0.41", default-features = false, features = ["rustls", "archive-tar", "compression-flate2"] }
 

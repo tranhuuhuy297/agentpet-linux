@@ -82,6 +82,20 @@ global `selected_pet_id` default. Pets are placed in stable per-kind slots so
 they don't overlap. Per-session detail still lives in the monitor window and the
 tray count (both remain aggregate across all agents).
 
+### Pet packs — local Petdex install
+AgentPet hosts no art and downloads nothing. Pets are installed by the user with
+the official Petdex CLI (`npx petdex@latest install <slug>`), which writes each
+pack to `~/.petdex/pets/<slug>/` (a `pet.json` manifest + a `spritesheet.webp`).
+`petdex::scan_dir` reads that directory and lists every pack with a decodable
+`pet.json` (undecodable/empty entries are skipped); the Settings → Pet tab
+renders the list, shows the install command, and re-scans on open and on
+**Refresh**. Selecting a pet persists its `pet.json` `id` via
+`Config::set_pet_for`; `ui::load_pack_for_kind` then scans the same directory,
+matches that id, and `sprite::load_pack` slices the spritesheet into clips
+(alpha-gutter detection — no grid metadata). The `image` crate is built with the
+pure-Rust `webp` decoder so Petdex's WebP sheets load without system codecs; a
+missing/corrupt sheet falls back to the coloured blob.
+
 ## Hook installation
 Enabling an agent in Settings writes a command into that agent's config
 (`~/.claude/settings.json`, `~/.codex/hooks.json`) embedding the absolute binary

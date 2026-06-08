@@ -38,18 +38,3 @@ pub enum UiCommand {
     /// Reload every live pet's pack (after a per-agent pet selection changes).
     ReloadPets,
 }
-
-/// Gallery requests from the GTK side to the tokio worker (network-bound).
-#[derive(Clone, Debug)]
-pub enum GalleryRequest {
-    Fetch,
-    Download(crate::petdex::RemotePet),
-}
-
-/// Gallery results from the tokio worker back to the GTK side.
-#[derive(Clone, Debug)]
-pub enum GalleryResult {
-    Manifest(Vec<crate::petdex::RemotePet>),
-    Downloaded(String),
-    Failed(String),
-}

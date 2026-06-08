@@ -2,6 +2,27 @@
 
 All notable changes to AgentPet for Linux.
 
+## 0.4.0 — 2026-06-08
+
+### Pets from the Petdex CLI
+- **Pets are now installed locally with the Petdex CLI**, not downloaded in-app.
+  Run `npx petdex@latest install <slug>` (writes to `~/.petdex/pets/<slug>/`),
+  then the Settings → Pet tab lists every installed pack and assigns one per
+  agent. The tab shows the install command and a **Refresh** button, and re-scans
+  on open so newly-installed pets appear without a restart.
+- **Sprite thumbnails in the Pet tab.** Each row shows the pet's own sprite (first
+  frame, cached per slug), falling back to a coloured blob only when a pack's
+  spritesheet can't be decoded.
+- **Link to the Petdex gallery** from the Pet tab's install guide, and the picked
+  marker now shows the full agent name ("✓ Claude Code", not "✓ Claude").
+- **Removed the in-app online gallery** (manifest fetch + downloads + the
+  first-run starter-pet bootstrap) and the `reqwest` dependency with it; the app
+  hosts no art and makes no network calls for pets. `petdex::scan_dir` reads the
+  local pack directory and skips entries without a decodable `pet.json`.
+- **WebP spritesheets now render.** Enabled the `image` crate's pure-Rust `webp`
+  decoder — Petdex packs ship `spritesheet.webp`, which previously failed to slice
+  and fell back to the coloured blob.
+
 ## 0.3.0 — 2026-06-08
 
 ### Per-agent pets

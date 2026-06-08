@@ -215,6 +215,21 @@ h2 { font-size:clamp(28px,3.4vw,40px); letter-spacing:-.02em; line-height:1.1; f
 .card h3 { font-size:18px; letter-spacing:-.01em; margin-bottom:8px; }
 .card p { color:var(--muted); font-size:14.5px; }
 
+/* how-to-use steps */
+.steps { display:flex; flex-direction:column; gap:16px; max-width:780px; }
+.step { display:flex; gap:18px; background:var(--surface); border:1px solid var(--border);
+  border-radius:16px; padding:24px 26px; transition:.2s; }
+.step:hover { border-color:var(--cyan-deep); }
+.step .num { flex-shrink:0; width:34px; height:34px; border-radius:10px; display:grid; place-items:center;
+  font-family:var(--mono); font-weight:700; font-size:15px; background:var(--cyan); color:#06131c; }
+.step .body { flex:1; min-width:0; }
+.step h3 { font-size:17px; letter-spacing:-.01em; margin-bottom:7px; }
+.step p { color:var(--muted); font-size:14.5px; line-height:1.6; }
+.step p code, .step h3 code { font-family:var(--mono); font-size:12.5px; color:var(--text);
+  background:var(--surface-2); border:1px solid var(--border); border-radius:5px; padding:1px 5px; }
+.step a { color:var(--cyan); }
+.step .cmd { margin-top:13px; }
+
 /* agents */
 .agrid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
 .agent { display:flex; gap:14px; align-items:flex-start; background:var(--surface); border:1px solid var(--border);
@@ -310,6 +325,7 @@ html.no-js .reveal { opacity:1; transform:none; }
       <span class="plat">linux</span>
     </a>
     <div class="nav-right">
+      <a class="link-ghost" href="#usage">How to use</a>
       <a class="ghbtn" href="https://github.com/tranhuuhuy297/agentpet-linux" target="_blank" rel="noopener">
         <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
         GitHub
@@ -408,17 +424,76 @@ html.no-js .reveal { opacity:1; transform:none; }
   </div>
 </section>
 
+<!-- HOW TO USE -->
+<section class="sec" id="usage" style="padding-top:0;">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">Get started</div>
+      <h2>Up and running in four steps.</h2>
+      <p>Install the app, connect your agents, add a pet from Petdex, and you're watching.</p>
+    </div>
+    <div class="steps reveal">
+
+      <div class="step">
+        <div class="num">1</div>
+        <div class="body">
+          <h3>Install AgentPet</h3>
+          <p>One command on Ubuntu 22.04+ — downloads the prebuilt binary into <code>~/.local</code>, no build and no Rust toolchain (<code>sudo</code> only if the GTK4 runtime is missing).</p>
+          <div class="cmd">
+            <span class="prompt">$</span>
+            <code>curl -fsSL https://raw.githubusercontent.com/tranhuuhuy297/agentpet-linux/main/install.sh | bash</code>
+            <button class="copy" data-copy="curl -fsSL https://raw.githubusercontent.com/tranhuuhuy297/agentpet-linux/main/install.sh | bash">Copy</button>
+          </div>
+          <p style="margin-top:11px;">Launch <b>AgentPet</b> from your app menu, or run <code>agentpet</code>. The tray paw needs the GNOME <i>AppIndicator and KStatusNotifierItem Support</i> extension — without it the app still runs (reach Settings/Quit by right-clicking the pet).</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="num">2</div>
+        <div class="body">
+          <h3>Connect your agents</h3>
+          <p>Open <b>Settings → General</b> and toggle on the agents you use. AgentPet writes its hook into each agent's own config — <code>~/.claude/settings.json</code> for Claude Code, <code>~/.codex/hooks.json</code> for Codex. A confirmation dialog names the exact file before any write, existing configs are backed up, and foreign hooks are never touched.</p>
+          <p style="margin-top:9px;">Want to watch any other CLI tool? Wrap it: <code>agentpet run -- &lt;command&gt;</code> (e.g. <code>agentpet run -- aider</code>) reports <i>working</i> while it runs and <i>done</i> when it exits.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="num">3</div>
+        <div class="body">
+          <h3>Add a pet from Petdex</h3>
+          <p>AgentPet hosts no art and downloads nothing itself — pets come from the community <a href="https://petdex.dev" target="_blank" rel="noopener">Petdex</a> gallery. Browse <a href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, copy a pet's slug, and install it with the official Petdex CLI:</p>
+          <div class="cmd">
+            <span class="prompt">$</span>
+            <code>npx petdex@latest install snow-plum-lillia</code>
+            <button class="copy" data-copy="npx petdex@latest install snow-plum-lillia">Copy</button>
+          </div>
+          <p style="margin-top:11px;">Each pack installs to <code>~/.petdex/pets/&lt;slug&gt;</code> (a manifest + spritesheet). Install as many as you like — repeat the command with any slug.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="num">4</div>
+        <div class="body">
+          <h3>Pick a pet for each agent</h3>
+          <p>In <b>Settings → Pet</b>, hit <b>Refresh</b> to list every pet you've installed — each shown with its own sprite. Choose the target agent from the dropdown, then click <b>Use</b>: Claude Code and Codex can each wear a different pet. A pet appears whenever its agent is active and its mood mirrors that agent's live state — calm, busy, or waving for attention.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
 <!-- FOOTER -->
 <footer>
   <div class="wrap" style="display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;">
     <div>
       <a class="brand" href="#"><img class="ico" src="assets/agentpet-icon.png" alt="">AgentPet <span class="plat">linux</span></a>
-      <p style="margin-top:10px;font-size:13px;color:var(--muted);">An Ubuntu app inspired by <a href="https://github.com/ntd4996/agentpet" target="_blank" rel="noopener" style="color:var(--cyan)">AgentPet</a> · pets from <a href="https://petdex.crafter.run/" target="_blank" rel="noopener" style="color:var(--cyan)">Petdex</a>.</p>
+      <p style="margin-top:10px;font-size:13px;color:var(--muted);">An Ubuntu app inspired by <a href="https://github.com/ntd4996/agentpet" target="_blank" rel="noopener" style="color:var(--cyan)">AgentPet</a> · pets from <a href="https://petdex.dev" target="_blank" rel="noopener" style="color:var(--cyan)">Petdex</a>.</p>
     </div>
     <div style="display:flex;gap:24px;align-items:center;font-size:14px;color:var(--muted);flex-wrap:wrap;">
       <a href="https://github.com/tranhuuhuy297/agentpet-linux" target="_blank" rel="noopener" style="color:var(--muted)">GitHub</a>
       <a href="https://github.com/ntd4996/agentpet" target="_blank" rel="noopener" style="color:var(--muted)">AgentPet (macOS)</a>
-      <a href="https://petdex.crafter.run/" target="_blank" rel="noopener" style="color:var(--muted)">Petdex</a>
+      <a href="https://petdex.dev" target="_blank" rel="noopener" style="color:var(--muted)">Petdex</a>
       <span class="mono" style="font-size:12.5px;color:var(--faint)">MIT · Rust + GTK4</span>
     </div>
   </div>

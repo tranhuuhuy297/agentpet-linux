@@ -1,31 +1,25 @@
-//! The Settings window: connect agents (hook install toggles), browse/download
-//! pets (Petdex gallery), and About. Ports `SetupView.swift`, styled after the
-//! libadwaita design reference (headerbar view switcher + boxed groups).
+//! The Settings window: connect agents (hook install toggles), pick a pet from
+//! the locally-installed Petdex packs, and About. Ports `SetupView.swift`,
+//! styled after the libadwaita design reference (headerbar view switcher +
+//! boxed groups).
 
 mod about;
 mod general;
 mod pet_page;
 mod style;
 
-use crate::snapshot::{GalleryRequest, GalleryResult, UiCommand};
+use crate::snapshot::UiCommand;
 use async_channel::Sender;
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, HeaderBar, Label, Stack, StackSwitcher};
-use std::cell::Cell;
-use std::rc::Rc;
 
 pub struct SettingsWindow {
     window: ApplicationWindow,
     pets: pet_page::PetPage,
-    requested: Rc<Cell<bool>>,
 }
 
 impl SettingsWindow {
-    pub fn new(
-        app: &Application,
-        gallery_tx: Sender<GalleryRequest>,
-        cmd: Sender<UiCommand>,
-    ) -> Self {
+    pub fn new(app: &Application, cmd: Sender<UiCommand>) -> Self {
         style::ensure_loaded();
 
         let window = ApplicationWindow::builder()
@@ -36,7 +30,7 @@ impl SettingsWindow {
             .build();
         window.set_hide_on_close(true);
 
-        let pets = pet_page::PetPage::new(gallery_tx, cmd);
+        let pets = pet_page::PetPage::new(cmd);
         let stack = Stack::new();
         stack.add_titled(&general::build(), Some("general"), "General");
         stack.add_titled(pets.widget(), Some("pet"), "Pet");
@@ -55,18 +49,13 @@ impl SettingsWindow {
         window.set_titlebar(Some(&header));
         window.set_child(Some(&stack));
 
-        SettingsWindow { window, pets, requested: Rc::new(Cell::new(false)) }
+        SettingsWindow { window, pets }
     }
 
     pub fn show(&self) {
         self.window.present();
-        if !self.requested.get() {
-            self.requested.set(true);
-            self.pets.begin_loading();
-        }
-    }
-
-    pub fn apply_gallery_result(&self, result: GalleryResult) {
-        self.pets.apply_result(result);
+        // Re-scan on every open so pets installed via the CLI since last time
+        // show up without restarting the app.
+        self.pets.refresh();
     }
 }

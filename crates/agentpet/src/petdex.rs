@@ -1,284 +1,122 @@
-//! Petdex online pet library client. Ports `PetBrowser.swift` + `PetInstaller`.
+//! Local Petdex pet library: lists the pet packs the user has installed with the
+//! official Petdex CLI (`npx petdex@latest install <slug>`), which writes each
+//! pack to `~/.petdex/pets/<slug>/` (a `pet.json` manifest + spritesheet).
 //!
-//! The gallery and the first-run starter pet both come from Petdex's public
-//! manifest; AgentPet hosts no art of its own. Pure parsing is split out and
-//! unit-tested; the async fetch/download wrap it with network IO.
+//! AgentPet hosts no art and performs no downloads — installation is delegated
+//! to the Petdex CLI; here we only *read* that directory so the Settings → Pet
+//! tab can offer the installed packs for per-agent selection. Pure scanning is
+//! split out (`scan_dir`) and unit-tested; `scan_installed` wraps it with the
+//! `$HOME`-relative path.
 
-use agentpet_core::ipc;
-use serde::Deserialize;
-use std::path::PathBuf;
+use agentpet_core::sprite::PetManifest;
+use std::path::{Path, PathBuf};
 
-/// Petdex's public manifest endpoint.
-pub const MANIFEST_URL: &str = "https://petdex.crafter.run/api/manifest";
-/// Preferred first-run starter pet (a non-franchise original); falls back to any.
-pub const STARTER_SLUG: &str = "boba";
-/// The asset CDN gates downloads on this Referer (returns 403 otherwise).
-const ASSET_REFERER: &str = "https://petdex.crafter.run/";
-const USER_AGENT: &str = concat!("AgentPet/", env!("CARGO_PKG_VERSION"));
+/// The exact command users run to install a pet (shown as a Settings guide).
+pub const INSTALL_HINT: &str = "npx petdex@latest install <slug>";
 
-/// Shared HTTP client carrying our user-agent.
-fn client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .unwrap_or_default()
+/// `~/.petdex/pets` — where the Petdex CLI installs pet packs.
+pub fn installed_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    PathBuf::from(home).join(".petdex").join("pets")
 }
 
-/// GETs a URL with the Referer the Petdex CDN requires.
-async fn get_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, reqwest::Error> {
-    let resp = client
-        .get(url)
-        .header(reqwest::header::REFERER, ASSET_REFERER)
-        .send()
-        .await?
-        .error_for_status()?;
-    Ok(resp.bytes().await?.to_vec())
-}
-
-/// One entry in the Petdex manifest (only the fields we use).
-#[derive(Debug, Clone, Deserialize)]
-pub struct RemotePet {
+/// One locally-installed pet pack, as surfaced in the Pet tab.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledPet {
+    /// Directory name under `~/.petdex/pets` (the Petdex slug).
     pub slug: String,
-    #[serde(rename = "displayName")]
-    pub display_name: Option<String>,
-    /// Petdex category (character/creature/object); retained for a future filter.
-    #[allow(dead_code)]
-    pub kind: Option<String>,
-    #[serde(rename = "submittedBy")]
-    pub submitted_by: Option<String>,
-    #[serde(rename = "spritesheetUrl")]
-    pub spritesheet_url: String,
-    #[serde(rename = "petJsonUrl")]
-    pub pet_json_url: String,
+    /// Pack id from `pet.json` (`id`) — what gets persisted as the agent's pick.
+    pub id: String,
+    /// Human-readable name from `pet.json` (`displayName`), else the slug.
+    pub display_name: String,
 }
 
-impl RemotePet {
-    pub fn name(&self) -> &str {
-        self.display_name.as_deref().unwrap_or(&self.slug)
-    }
-    pub fn author(&self) -> &str {
-        self.submitted_by.as_deref().unwrap_or("community")
-    }
+/// Scans `~/.petdex/pets` for installed packs (see [`scan_dir`]).
+pub fn scan_installed() -> Vec<InstalledPet> {
+    scan_dir(&installed_dir())
 }
 
-/// Maps an HTTP failure to a user-facing message that says *who* is at fault
-/// (Petdex's hosting, the user's connection, or the request) and what to do.
-/// Pure so it's unit-testable; `friendly_error` extracts the inputs.
-fn describe_http_failure(status: Option<u16>, unreachable: bool) -> String {
-    match status {
-        Some(429) => "Petdex's server is rate-limited (their hosting hit its quota) — \
-                      not a problem on your end. Try again in a few hours."
-            .into(),
-        Some(s) if (500..600).contains(&s) => {
-            format!("Petdex's server is having problems (HTTP {s}). Try again later.")
-        }
-        Some(s) => format!("Petdex rejected the request (HTTP {s})."),
-        None if unreachable => "Couldn't reach Petdex — check your internet connection.".into(),
-        None => "Network error while talking to Petdex.".into(),
-    }
-}
-
-/// Walks an error's source chain to the underlying `reqwest::Error` (if any)
-/// and renders it via [`describe_http_failure`]. Non-network errors (bad JSON,
-/// disk write) fall through to their own message.
-pub fn friendly_error(e: &(dyn std::error::Error + 'static)) -> String {
-    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
-    while let Some(err) = cur {
-        if let Some(req) = err.downcast_ref::<reqwest::Error>() {
-            let status = req.status().map(|s| s.as_u16());
-            return describe_http_failure(status, req.is_connect() || req.is_timeout());
-        }
-        cur = err.source();
-    }
-    format!("Download failed: {e}")
-}
-
-/// Tolerantly parses the manifest body into pets, skipping malformed entries
-/// (mirrors the macOS `Lenient` decode wrapper).
-pub fn parse_manifest(bytes: &[u8]) -> Vec<RemotePet> {
-    let Ok(root) = serde_json::from_slice::<serde_json::Value>(bytes) else {
-        return Vec::new();
+/// Reads every `<dir>/<slug>/pet.json`, skipping entries without a decodable
+/// manifest, and returns the packs sorted by display name (case-insensitive).
+/// Pure (takes the directory) so it's unit-testable without touching `$HOME`.
+pub fn scan_dir(dir: &Path) -> Vec<InstalledPet> {
+    let mut pets = Vec::new();
+    // A missing/unreadable dir is treated as "nothing installed" — the common
+    // case is a user who hasn't run the Petdex CLI yet, and the empty-state
+    // status line tells them how to install.
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return pets;
     };
-    let Some(items) = root.get("pets").and_then(|v| v.as_array()) else {
-        return Vec::new();
-    };
-    items
-        .iter()
-        .filter_map(|v| serde_json::from_value::<RemotePet>(v.clone()).ok())
-        .collect()
-}
-
-/// Fetches and parses the live manifest.
-pub async fn fetch_manifest() -> Result<Vec<RemotePet>, reqwest::Error> {
-    let bytes = get_bytes(&client(), MANIFEST_URL).await?;
-    Ok(parse_manifest(&bytes))
-}
-
-/// Minimal `pet.json` shape needed to know the spritesheet filename + id.
-#[derive(Deserialize)]
-struct PackMeta {
-    id: Option<String>,
-    #[serde(rename = "spritesheetPath")]
-    spritesheet_path: String,
-}
-
-/// Downloads a pack (`pet.json` + spritesheet) into `~/.agentpet/pets/<slug>/`.
-/// Returns the installed pack id (the manifest `id`, or the slug).
-pub async fn download(pet: &RemotePet) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let dir = pets_dir().join(&pet.slug);
-    std::fs::create_dir_all(&dir)?;
-
-    // Fetch first, write second — so a failed download never leaves a partial
-    // pack on disk.
-    let http = client();
-    let result = async {
-        let pet_json = get_bytes(&http, &pet.pet_json_url).await?;
-        let meta: PackMeta = serde_json::from_slice(&pet_json)?;
-        let sheet = get_bytes(&http, &pet.spritesheet_url).await?;
-        std::fs::write(dir.join("pet.json"), &pet_json)?;
-        std::fs::write(dir.join(&meta.spritesheet_path), &sheet)?;
-        Ok::<String, Box<dyn std::error::Error + Send + Sync>>(meta.id.unwrap_or_else(|| pet.slug.clone()))
-    }
-    .await;
-
-    if result.is_err() {
-        let _ = std::fs::remove_dir_all(&dir); // clean up the empty/partial dir
-    }
-    result
-}
-
-/// `~/.agentpet/pets`.
-pub fn pets_dir() -> PathBuf {
-    ipc::base_dir().join("pets")
-}
-
-/// Services gallery requests on the tokio runtime: fetches the manifest and
-/// downloads packs, reporting results back to the GTK side. On a successful
-/// download it selects the pack and signals a pet reload.
-pub async fn gallery_worker(
-    rx: async_channel::Receiver<crate::snapshot::GalleryRequest>,
-    tx: async_channel::Sender<crate::snapshot::GalleryResult>,
-    reload: async_channel::Sender<()>,
-) {
-    use crate::snapshot::{GalleryRequest, GalleryResult};
-    while let Ok(req) = rx.recv().await {
-        match req {
-            GalleryRequest::Fetch => {
-                let result = match fetch_manifest().await {
-                    Ok(pets) => GalleryResult::Manifest(pets),
-                    Err(e) => GalleryResult::Failed(format!(
-                        "Couldn't load the pet library — {}",
-                        friendly_error(&e)
-                    )),
-                };
-                let _ = tx.send(result).await;
-            }
-            GalleryRequest::Download(pet) => {
-                let result = match download(&pet).await {
-                    Ok(id) => {
-                        // Seed the global default only if unset; the GTK side
-                        // assigns the pet to the requesting agent, so don't
-                        // clobber the default other agents fall back to.
-                        let mut cfg = agentpet_core::config::Config::load();
-                        if cfg.selected_pet_id.is_none() {
-                            cfg.selected_pet_id = Some(id.clone());
-                            let _ = cfg.save();
-                        }
-                        let _ = reload.send(()).await;
-                        GalleryResult::Downloaded(id)
-                    }
-                    Err(e) => GalleryResult::Failed(format!(
-                        "Couldn't install '{}' — {}",
-                        pet.name(),
-                        friendly_error(e.as_ref())
-                    )),
-                };
-                let _ = tx.send(result).await;
-            }
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
         }
+        let Ok(bytes) = std::fs::read(path.join("pet.json")) else {
+            continue;
+        };
+        let Some(manifest) = PetManifest::decode(&bytes) else {
+            continue;
+        };
+        let slug = entry.file_name().to_string_lossy().into_owned();
+        let display_name = if manifest.display_name.is_empty() {
+            slug.clone()
+        } else {
+            manifest.display_name
+        };
+        pets.push(InstalledPet { slug, id: manifest.id, display_name });
     }
-}
-
-/// True if at least one pet pack is already installed.
-pub fn has_installed_pack() -> bool {
-    std::fs::read_dir(pets_dir())
-        .map(|rd| rd.flatten().any(|e| e.path().join("pet.json").exists()))
-        .unwrap_or(false)
-}
-
-/// On first launch (no pack installed), downloads the starter pet and selects
-/// it. Always signals `reload` so the GTK side loads whatever is present.
-/// Network failures are non-fatal (the blob fallback keeps the pet visible).
-pub async fn bootstrap_if_needed(reload: async_channel::Sender<()>) {
-    if has_installed_pack() {
-        let _ = reload.send(()).await;
-        return;
-    }
-    let Ok(pets) = fetch_manifest().await else {
-        return;
-    };
-    let pick = pets.iter().find(|p| p.slug == STARTER_SLUG).or_else(|| pets.first());
-    if let Some(pet) = pick {
-        match download(pet).await {
-            Ok(id) => {
-                let mut cfg = agentpet_core::config::Config::load();
-                cfg.selected_pet_id = Some(id);
-                let _ = cfg.save();
-                let _ = reload.send(()).await;
-                eprintln!("agentpet: installed starter pet '{}'", pet.slug);
-            }
-            Err(e) => {
-                eprintln!("agentpet: starter pet download failed: {}", friendly_error(e.as_ref()))
-            }
-        }
-    }
+    pets.sort_by_key(|p| p.display_name.to_lowercase());
+    pets
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_manifest_and_skips_bad_entries() {
-        let body = br#"{
-            "pets": [
-                {"slug":"boba","displayName":"Boba","kind":"character",
-                 "submittedBy":"alice","spritesheetUrl":"https://x/boba.png","petJsonUrl":"https://x/boba.json"},
-                {"slug":"broken"},
-                {"slug":"cube","spritesheetUrl":"https://x/c.png","petJsonUrl":"https://x/c.json"}
-            ]
-        }"#;
-        let pets = parse_manifest(body);
-        assert_eq!(pets.len(), 2, "the entry missing required URLs is skipped");
-        assert_eq!(pets[0].slug, "boba");
-        assert_eq!(pets[0].name(), "Boba");
-        assert_eq!(pets[0].author(), "alice");
-        assert_eq!(pets[1].name(), "cube", "falls back to slug when no displayName");
-        assert_eq!(pets[1].author(), "community");
+    fn write_pack(root: &Path, slug: &str, json: &str) {
+        let dir = root.join(slug);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pet.json"), json).unwrap();
     }
 
     #[test]
-    fn parse_handles_garbage() {
-        assert!(parse_manifest(b"not json").is_empty());
-        assert!(parse_manifest(br#"{"nope": 1}"#).is_empty());
+    fn scans_installed_packs_sorted_by_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_pack(
+            tmp.path(),
+            "snow-plum-lillia",
+            r#"{"id":"snow-plum-lillia","displayName":"Snow Plum Lillia","spritesheetPath":"spritesheet.webp","version":"1.1.0"}"#,
+        );
+        write_pack(
+            tmp.path(),
+            "boba",
+            r#"{"id":"boba","displayName":"Boba","spritesheetPath":"spritesheet.webp"}"#,
+        );
+
+        let pets = scan_dir(tmp.path());
+        assert_eq!(pets.len(), 2);
+        // Sorted case-insensitively by display name: "Boba" before "Snow…".
+        assert_eq!(pets[0].id, "boba");
+        assert_eq!(pets[0].display_name, "Boba");
+        assert_eq!(pets[1].slug, "snow-plum-lillia");
+        assert_eq!(pets[1].display_name, "Snow Plum Lillia");
     }
 
     #[test]
-    fn http_failures_name_the_culprit() {
-        // Petdex's hosting at fault: rate limit and server errors.
-        assert!(describe_http_failure(Some(429), false).contains("rate-limited"));
-        assert!(describe_http_failure(Some(503), false).contains("HTTP 503"));
-        // Request rejected (e.g. 403 missing Referer).
-        assert!(describe_http_failure(Some(403), false).contains("HTTP 403"));
-        // User's connection at fault.
-        assert!(describe_http_failure(None, true).contains("internet connection"));
-        // Unknown network failure.
-        assert!(describe_http_failure(None, false).contains("Network error"));
+    fn skips_entries_without_a_decodable_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_pack(tmp.path(), "good", r#"{"id":"good","displayName":"Good","spritesheetPath":"s.webp"}"#);
+        write_pack(tmp.path(), "broken", "not json");
+        std::fs::create_dir_all(tmp.path().join("empty")).unwrap(); // no pet.json at all
+
+        let pets = scan_dir(tmp.path());
+        assert_eq!(pets.len(), 1, "only the decodable pack is listed");
+        assert_eq!(pets[0].id, "good");
     }
 
     #[test]
-    fn friendly_error_falls_through_for_non_network_errors() {
-        let e = serde_json::from_slice::<PackMeta>(b"not json").err().unwrap();
-        assert!(friendly_error(&e).starts_with("Download failed:"));
+    fn missing_directory_yields_no_pets() {
+        assert!(scan_dir(Path::new("/nonexistent/petdex/pets")).is_empty());
     }
 }

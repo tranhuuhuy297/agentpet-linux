@@ -10,7 +10,7 @@ pub mod settings;
 pub mod tray;
 
 use crate::pet::PetWindow;
-use crate::snapshot::{GalleryRequest, GalleryResult, UiCommand, UiUpdate};
+use crate::snapshot::{UiCommand, UiUpdate};
 use agentpet_core::catalog::AgentCatalog;
 use agentpet_core::config::Config;
 use agentpet_core::sprite::{load_pack, PetPack};
@@ -34,14 +34,10 @@ pub struct Ui {
 }
 
 impl Ui {
-    pub fn build(
-        app: &gtk4::Application,
-        cmd: async_channel::Sender<UiCommand>,
-        gallery_tx: async_channel::Sender<GalleryRequest>,
-    ) -> Self {
+    pub fn build(app: &gtk4::Application, cmd: async_channel::Sender<UiCommand>) -> Self {
         let hold = app.hold();
         let monitor = monitor::MonitorWindow::new(app, cmd.clone());
-        let settings = settings::SettingsWindow::new(app, gallery_tx, cmd.clone());
+        let settings = settings::SettingsWindow::new(app, cmd.clone());
         let tray = tray::spawn(cmd.clone());
         Ui {
             app: app.clone(),
@@ -56,10 +52,6 @@ impl Ui {
 
     pub fn show_settings(&self) {
         self.settings.show();
-    }
-
-    pub fn apply_gallery_result(&self, result: GalleryResult) {
-        self.settings.apply_gallery_result(result);
     }
 
     pub fn apply(&self, update: &UiUpdate) {
@@ -152,7 +144,7 @@ fn load_pack_for_kind(kind: AgentKind) -> Option<PetPack> {
     let cfg = Config::load();
     let want = cfg.pet_id_for(kind);
     let mut first = None;
-    if let Ok(entries) = std::fs::read_dir(crate::petdex::pets_dir()) {
+    if let Ok(entries) = std::fs::read_dir(crate::petdex::installed_dir()) {
         for entry in entries.flatten() {
             if let Some(pack) = load_pack(&entry.path()) {
                 if want == Some(pack.manifest.id.as_str()) {

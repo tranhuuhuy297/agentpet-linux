@@ -1,57 +1,93 @@
-//! Pet tab: pick a pet per agent. A dropdown selects which agent (Claude Code,
-//! Codex, …) you're assigning a pet to; the searchable Petdex gallery below
-//! shows each pet with an action that targets the selected agent:
-//! - not installed → "Add" (downloads, then assigns to the agent),
-//! - installed      → "Use" (assigns without re-downloading),
+//! Pet tab: pick a pet per agent from the packs you've installed locally with
+//! the Petdex CLI. A dropdown selects which agent (Claude Code, Codex, …) you're
+//! assigning a pet to; a short guide shows the `npx petdex install` command and
+//! a Refresh button re-scans after you install more. The list below shows each
+//! installed pet with an action targeting the selected agent:
+//! - installed      → "Use" (assigns it to the agent),
 //! - already chosen → a disabled "✓ <Agent>'s pet" marker.
+//!
+//! AgentPet performs no downloads; installation is delegated to the official
+//! Petdex CLI, which writes packs to `~/.petdex/pets/<slug>/`.
 
-use crate::petdex::{pets_dir, RemotePet, STARTER_SLUG};
-use crate::snapshot::{GalleryRequest, GalleryResult, UiCommand};
+use crate::petdex::{installed_dir, scan_installed, InstalledPet, INSTALL_HINT};
+use crate::snapshot::UiCommand;
 use agentpet_core::catalog::AgentCatalog;
 use agentpet_core::config::Config;
+use agentpet_core::sprite::load_pack;
 use agentpet_core::state::AgentKind;
 use async_channel::Sender;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GtkBox, Button, DropDown, Label, ListBox, Orientation, PolicyType,
-    ScrolledWindow, SearchEntry,
+    gdk, glib, Align, Box as GtkBox, Button, DropDown, Image, Label, ListBox, Orientation,
+    PolicyType, ScrolledWindow, SearchEntry,
 };
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-const MAX_ROWS: usize = 60;
+const MAX_ROWS: usize = 200;
 const BLOB_COLORS: usize = 8;
+/// On-screen size (px) of each row's pet icon.
+const ICON_PX: i32 = 36;
+/// The Petdex gallery, linked from the install guide so users can find slugs.
+const PETDEX_URL: &str = "https://petdex.dev";
+const PETDEX_HOST: &str = "petdex.dev";
 
 /// Shared, cloneable handles the row callbacks need to re-render and persist a
 /// pet choice. Cloning is cheap (everything inside is `Rc`/`Sender`/widget ref).
 #[derive(Clone)]
 struct PetCtx {
     list: ListBox,
-    all_pets: Rc<RefCell<Vec<RemotePet>>>,
+    installed: Rc<RefCell<Vec<InstalledPet>>>,
     search: SearchEntry,
+    status: Label,
     /// Agent currently targeted by the gallery actions.
     agent: Rc<RefCell<AgentKind>>,
     /// Pet pack id chosen for the targeted agent (drives the "✓" marker).
     pick: Rc<RefCell<Option<String>>>,
-    /// Agent that initiated an in-flight download (assigned on completion).
-    pending: Rc<RefCell<Option<AgentKind>>>,
-    gallery_tx: Sender<GalleryRequest>,
+    /// Cached first-frame sprite textures, keyed by slug — built once per pack so
+    /// re-renders (search keystrokes, agent switches) don't re-slice spritesheets.
+    thumbs: Rc<RefCell<HashMap<String, gdk::Texture>>>,
     cmd_tx: Sender<UiCommand>,
 }
 
 impl PetCtx {
+    /// Re-scans `~/.petdex/pets`, updates the status line, and re-renders the
+    /// list (called on open and on Refresh).
+    fn refresh(&self) {
+        let pets = scan_installed();
+        // Build a sprite thumbnail for any newly-seen pack (cached by slug).
+        {
+            let mut thumbs = self.thumbs.borrow_mut();
+            for pet in &pets {
+                if !thumbs.contains_key(&pet.slug) {
+                    if let Some(tex) = load_thumbnail(&pet.slug) {
+                        thumbs.insert(pet.slug.clone(), tex);
+                    }
+                }
+            }
+        }
+        self.status.set_text(&status_text(pets.len()));
+        *self.installed.borrow_mut() = pets;
+        self.render();
+    }
+
     fn render(&self) {
         let list = &self.list;
         while let Some(child) = list.first_child() {
             list.remove(&child);
         }
-        let pets = self.all_pets.borrow();
+        let pets = self.installed.borrow();
         let q = self.search.text().to_lowercase();
         let pick = self.pick.borrow().clone();
         let agent = *self.agent.borrow();
         let filtered = pets
             .iter()
-            .filter(|p| q.is_empty() || p.name().to_lowercase().contains(&q) || p.slug.contains(&q))
+            .filter(|p| {
+                q.is_empty()
+                    || p.display_name.to_lowercase().contains(&q)
+                    || p.slug.contains(&q)
+            })
             .take(MAX_ROWS);
         for pet in filtered {
             list.append(&self.pet_row(pet, agent, pick.as_deref()));
@@ -60,8 +96,7 @@ impl PetCtx {
 
     /// Assigns a pet pack to `agent`, persists it, refreshes live pets, and
     /// re-renders if the targeted agent is the one on screen. Reloads config
-    /// from disk first so a concurrent default-pet write (e.g. the download
-    /// worker) is preserved rather than clobbered.
+    /// from disk first so a concurrent per-agent write is preserved.
     fn assign(&self, agent: AgentKind, pack_id: String) {
         let mut cfg = Config::load();
         cfg.set_pet_for(agent, pack_id.clone());
@@ -73,60 +108,54 @@ impl PetCtx {
         self.render();
     }
 
-    fn pet_row(&self, pet: &RemotePet, agent: AgentKind, pick: Option<&str>) -> GtkBox {
+    fn pet_row(&self, pet: &InstalledPet, agent: AgentKind, pick: Option<&str>) -> GtkBox {
         let row = GtkBox::new(Orientation::Horizontal, 14);
 
-        let blob = Label::new(None);
-        blob.set_valign(Align::Center);
-        blob.add_css_class("pet-blob");
-        blob.add_css_class(&format!("blob-{}", blob_color_index(&pet.slug)));
+        // Show the pet's own sprite (first frame); fall back to a coloured blob
+        // for packs whose spritesheet failed to decode.
+        let icon: gtk4::Widget = match self.thumbs.borrow().get(&pet.slug) {
+            Some(tex) => {
+                let img = Image::from_paintable(Some(tex));
+                img.set_pixel_size(ICON_PX);
+                img.upcast()
+            }
+            None => {
+                let blob = Label::new(None);
+                blob.add_css_class("pet-blob");
+                blob.add_css_class(&format!("blob-{}", blob_color_index(&pet.slug)));
+                blob.upcast()
+            }
+        };
+        icon.set_valign(Align::Center);
 
         let text = GtkBox::new(Orientation::Vertical, 2);
-        let title = GtkBox::new(Orientation::Horizontal, 8);
-        let name = Label::new(Some(pet.name()));
+        let name = Label::new(Some(&pet.display_name));
         name.set_xalign(0.0);
         name.add_css_class("rtitle");
-        title.append(&name);
-        if pet.slug == STARTER_SLUG {
-            let tag = Label::new(Some("starter"));
-            tag.set_valign(Align::Center);
-            tag.add_css_class("tag");
-            title.append(&tag);
-        }
-        let author = Label::new(Some(&format!("by {}", pet.author())));
-        author.set_xalign(0.0);
-        author.add_css_class("rsub");
-        text.append(&title);
-        text.append(&author);
+        let slug = Label::new(Some(&pet.slug));
+        slug.set_xalign(0.0);
+        slug.add_css_class("rsub");
+        slug.add_css_class("mono");
+        text.append(&name);
+        text.append(&slug);
         text.set_hexpand(true);
 
-        // Petdex pack ids match their slug, so compare against the slug.
-        let is_pick = pick == Some(pet.slug.as_str());
+        // Compare against the pack id (what `assign` persists as the pick).
+        let is_pick = pick == Some(pet.id.as_str());
         let action = if is_pick {
-            let btn = Button::with_label(&format!("✓ {}", agent_short(agent)));
+            let btn = Button::with_label(&format!("✓ {}", agent_label(agent)));
             btn.set_sensitive(false);
             btn.add_css_class("added");
             btn
-        } else if pet_installed(&pet.slug) {
-            let btn = Button::with_label("Use");
-            let (ctx, slug) = (self.clone(), pet.slug.clone());
-            btn.connect_clicked(move |_| ctx.assign(agent, slug.clone()));
-            btn
         } else {
-            let btn = Button::with_label("Add");
-            let (ctx, pet) = (self.clone(), pet.clone());
-            btn.connect_clicked(move |b| {
-                b.set_label("Adding…");
-                b.set_sensitive(false);
-                // Remember which agent to assign the pet to once it downloads.
-                *ctx.pending.borrow_mut() = Some(agent);
-                let _ = ctx.gallery_tx.try_send(GalleryRequest::Download(pet.clone()));
-            });
+            let btn = Button::with_label("Use");
+            let (ctx, id) = (self.clone(), pet.id.clone());
+            btn.connect_clicked(move |_| ctx.assign(agent, id.clone()));
             btn
         };
         action.set_valign(Align::Center);
 
-        row.append(&blob);
+        row.append(&icon);
         row.append(&text);
         row.append(&action);
         row
@@ -135,17 +164,15 @@ impl PetCtx {
 
 pub struct PetPage {
     root: GtkBox,
-    status: Label,
     ctx: PetCtx,
-    requested: Rc<RefCell<bool>>,
 }
 
 impl PetPage {
-    pub fn new(gallery_tx: Sender<GalleryRequest>, cmd_tx: Sender<UiCommand>) -> Self {
+    pub fn new(cmd_tx: Sender<UiCommand>) -> Self {
         let agents = AgentCatalog::all();
         let first_agent = agents.first().map(|a| a.kind).unwrap_or(AgentKind::Claude);
 
-        // Agent selector: which agent the gallery actions assign a pet to.
+        // Agent selector: which agent the actions assign a pet to.
         let names: Vec<&str> = agents.iter().map(|a| a.display_name).collect();
         let agent_dropdown = DropDown::from_strings(&names);
         let agent_row = GtkBox::new(Orientation::Horizontal, 10);
@@ -154,8 +181,14 @@ impl PetPage {
         agent_row.append(&agent_label);
         agent_row.append(&agent_dropdown);
 
+        // How-to-install guide with a Refresh button to re-scan after install.
+        let refresh = Button::with_label("Refresh");
+        refresh.set_valign(Align::Center);
+        let guide = build_install_guide(&refresh);
+
         let search = SearchEntry::new();
-        search.set_placeholder_text(Some("Search pets…"));
+        search.set_placeholder_text(Some("Search installed pets…"));
+
         let list = ListBox::new();
         list.set_selection_mode(gtk4::SelectionMode::None);
         list.add_css_class("boxed");
@@ -163,7 +196,8 @@ impl PetPage {
         scrolled.set_policy(PolicyType::Never, PolicyType::Automatic);
         scrolled.set_vexpand(true);
         scrolled.set_child(Some(&list));
-        let status = Label::new(Some("Open to load the pet library"));
+
+        let status = Label::new(Some(""));
         status.set_xalign(0.0);
         status.add_css_class("rsub");
 
@@ -173,6 +207,7 @@ impl PetPage {
         root.set_margin_start(24);
         root.set_margin_end(24);
         root.append(&agent_row);
+        root.append(&guide);
         root.append(&search);
         root.append(&status);
         root.append(&scrolled);
@@ -180,92 +215,121 @@ impl PetPage {
         let cfg = Config::load();
         let ctx = PetCtx {
             list,
-            all_pets: Rc::new(RefCell::new(Vec::new())),
+            installed: Rc::new(RefCell::new(Vec::new())),
             search: search.clone(),
+            status,
             agent: Rc::new(RefCell::new(first_agent)),
             pick: Rc::new(RefCell::new(cfg.pet_id_for(first_agent).map(str::to_string))),
-            pending: Rc::new(RefCell::new(None)),
-            gallery_tx,
+            thumbs: Rc::new(RefCell::new(HashMap::new())),
             cmd_tx,
         };
 
-        // Re-render when the search text or the targeted agent changes.
+        // Re-render when the search text changes; re-scan on Refresh.
         {
             let ctx = ctx.clone();
             search.connect_search_changed(move |_| ctx.render());
         }
         {
+            let ctx = ctx.clone();
+            refresh.connect_clicked(move |_| ctx.refresh());
+        }
+        // Switch the targeted agent and reflect its current pick.
+        {
             let (ctx, agents) = (ctx.clone(), agents.clone());
             agent_dropdown.connect_selected_notify(move |dd| {
                 if let Some(a) = agents.get(dd.selected() as usize) {
                     *ctx.agent.borrow_mut() = a.kind;
-                    // Reload from disk so the marker reflects this agent's pick.
                     *ctx.pick.borrow_mut() = Config::load().pet_id_for(a.kind).map(str::to_string);
                     ctx.render();
                 }
             });
         }
 
-        PetPage { root, status, ctx, requested: Rc::new(RefCell::new(false)) }
+        PetPage { root, ctx }
     }
 
     pub fn widget(&self) -> &GtkBox {
         &self.root
     }
 
-    /// Kicks off the manifest fetch (called on first open).
-    pub fn begin_loading(&self) {
-        if *self.requested.borrow() {
-            return;
-        }
-        *self.requested.borrow_mut() = true;
-        self.status.set_text("Loading pet library…");
-        let _ = self.ctx.gallery_tx.try_send(GalleryRequest::Fetch);
-    }
-
-    pub fn apply_result(&self, result: GalleryResult) {
-        match result {
-            GalleryResult::Manifest(pets) => {
-                self.status
-                    .set_text(&format!("{} pets available · served by Petdex", pets.len()));
-                *self.ctx.all_pets.borrow_mut() = pets;
-                self.ctx.render();
-            }
-            GalleryResult::Downloaded(id) => {
-                // Assign the freshly-installed pet to whichever agent requested
-                // it (falling back to the on-screen agent).
-                let agent =
-                    self.ctx.pending.borrow_mut().take().unwrap_or(*self.ctx.agent.borrow());
-                self.status
-                    .set_text(&format!("Installed '{id}' — now {}'s pet", agent_short(agent)));
-                self.ctx.assign(agent, id);
-            }
-            // The worker already sends a complete, user-facing sentence that
-            // names the culprit (Petdex's hosting vs. the user's connection).
-            GalleryResult::Failed(e) => {
-                self.status.set_text(&e);
-                self.ctx.render(); // restore any "Adding…" button to its label
-            }
-        }
+    /// Re-scans installed packs and re-renders (called whenever Settings opens).
+    pub fn refresh(&self) {
+        self.ctx.refresh();
     }
 }
 
-/// Short agent label for the action button (e.g. "Claude Code" → "Claude").
-fn agent_short(kind: AgentKind) -> &'static str {
-    match kind {
-        AgentKind::Claude => "Claude",
-        AgentKind::Codex => "Codex",
-        AgentKind::Cli => "CLI",
-        AgentKind::Unknown => "agent",
+/// Status line under the guide: a count, or an empty-state nudge to install.
+fn status_text(count: usize) -> String {
+    match count {
+        0 => format!("No pets installed yet — run `{INSTALL_HINT}`, then Refresh."),
+        1 => "1 pet installed · from ~/.petdex/pets".to_string(),
+        n => format!("{n} pets installed · from ~/.petdex/pets"),
     }
 }
 
-/// True if a pack for `slug` is already downloaded under `~/.agentpet/pets`.
-fn pet_installed(slug: &str) -> bool {
-    pets_dir().join(slug).join("pet.json").exists()
+/// A boxed guide telling the user how to install pets via the Petdex CLI, with
+/// the (selectable) command on its own line and the Refresh button on the right.
+fn build_install_guide(refresh: &Button) -> GtkBox {
+    let outer = GtkBox::new(Orientation::Horizontal, 12);
+    outer.add_css_class("boxed");
+
+    let text = GtkBox::new(Orientation::Vertical, 4);
+    text.set_hexpand(true);
+    let title = Label::new(Some("Install pets with the Petdex CLI"));
+    title.set_xalign(0.0);
+    title.add_css_class("group-title");
+    let cmd = Label::new(Some(INSTALL_HINT));
+    cmd.set_xalign(0.0);
+    cmd.set_selectable(true); // so the command can be copied
+    cmd.add_css_class("mono");
+    // A clickable link to the Petdex gallery so the user can find pet slugs to
+    // install. GTK's default `activate-link` handler opens the URI in the
+    // browser; markup keeps the rest of the sentence as plain caption text.
+    let note = Label::new(None);
+    note.set_xalign(0.0);
+    note.set_use_markup(true);
+    note.set_markup(&format!(
+        "Browse pets and copy a slug at <a href=\"{PETDEX_URL}\">{PETDEX_HOST}</a>, then Refresh."
+    ));
+    note.add_css_class("group-sub");
+    text.append(&title);
+    text.append(&cmd);
+    text.append(&note);
+
+    refresh.set_valign(Align::Center);
+    outer.append(&text);
+    outer.append(refresh);
+    outer
+}
+
+/// Full agent name for the picked marker (e.g. "Claude Code"), from the catalog
+/// so it stays in sync with the agent selector; falls back for wrapper kinds.
+fn agent_label(kind: AgentKind) -> &'static str {
+    AgentCatalog::all()
+        .into_iter()
+        .find(|a| a.kind == kind)
+        .map(|a| a.display_name)
+        .unwrap_or(match kind {
+            AgentKind::Cli => "CLI",
+            _ => "agent",
+        })
 }
 
 /// Stable palette pick per slug (mirrors the design reference's blob colours).
 fn blob_color_index(slug: &str) -> usize {
     slug.bytes().fold(0usize, |acc, b| acc.wrapping_add(b as usize)) % BLOB_COLORS
+}
+
+/// Renders a pack's first sprite frame into a GPU texture for the row icon.
+/// Returns `None` if the pack can't be loaded/sliced (caller shows a blob).
+fn load_thumbnail(slug: &str) -> Option<gdk::Texture> {
+    let pack = load_pack(&installed_dir().join(slug))?;
+    let frame = pack.clip(0).first()?;
+    let (w, h) = (frame.width() as i32, frame.height() as i32);
+    // image's `RgbaImage` is straight (non-premultiplied) RGBA8 — matches
+    // `R8g8b8a8`, so the sprite's transparency is preserved.
+    let bytes = glib::Bytes::from(frame.as_raw().as_slice());
+    let texture =
+        gdk::MemoryTexture::new(w, h, gdk::MemoryFormat::R8g8b8a8, &bytes, (w * 4) as usize);
+    Some(texture.upcast())
 }
