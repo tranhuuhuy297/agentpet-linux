@@ -50,10 +50,6 @@ list.boxed > row:not(:first-child) { border-top: 1px solid alpha(currentColor, 0
 }
 .agent-claude { background-color: #d97757; }
 .agent-codex { background-color: #10a37f; }
-.agent-gemini { background-color: #4285f4; }
-.agent-cursor { background-color: #7c8cf8; }
-.agent-opencode { background-color: #56d472; }
-.agent-windsurf { background-color: #21b6c9; }
 .agent-cli, .agent-unknown { background-color: #9aa9b6; }
 
 /* pet gallery blob */

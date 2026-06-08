@@ -21,13 +21,10 @@ pub mod state;
 
 pub use catalog::{AgentCatalog, AgentIntegration};
 pub use event::AgentEvent;
-pub use hooks::{AgentHookSpec, AgentHooks, HookInstaller, HookStyle};
+pub use hooks::{AgentHookSpec, AgentHooks, HookInstaller};
 pub use mapper::StateMapper;
 pub use mood::MoodResolver;
-pub use payloads::{
-    ClaudeHookPayload, CursorHookPayload, HookArguments, HookPayload, RunArguments,
-    WindsurfHookPayload,
-};
+pub use payloads::{ClaudeHookPayload, HookArguments, HookPayload, RunArguments};
 pub use session::{AgentSession, SessionStore};
 pub use sprite::{PetBindings, PetManifest};
 pub use state::{AgentKind, AgentSource, AgentState, PetMood, UnixTime};

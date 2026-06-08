@@ -1,10 +1,10 @@
 # AgentPet for Linux
 
-A native **Rust + GTK4** port of [AgentPet](https://github.com/ntd4996/agentpet)
-(macOS) for **Ubuntu 22.04+**. Watch several AI coding agents (Claude Code,
-Codex, Gemini CLI, Cursor, opencode, Windsurf) running in parallel and see — at
-a glance — which one is **working**, which is **done**, and which is **waiting
-for your input**, via a tray monitor and an ambient desktop pet.
+A native **Rust + GTK4** app for **Ubuntu 22.04+**, inspired by
+[AgentPet](https://github.com/ntd4996/agentpet) (macOS). Watch your AI coding agents (Claude Code and
+Codex) running in parallel and see — at a glance — which one is **working**,
+which is **done**, and which is **waiting for your input**, via a tray monitor
+and an ambient desktop pet.
 
 > Status: **working.** Core logic, CLI/daemon, the GTK pet + monitor + settings,
 > the Petdex gallery, notifications, and packaging are all implemented and
@@ -80,9 +80,9 @@ Pass `--keep-data` to preserve `~/.agentpet` (queue + downloaded pets).
 
 ## Usage
 
-- **Claude Code, Codex, Gemini, Cursor, opencode, Windsurf:** toggle them on in
-  Settings → General (installs the hook). The pet then reflects each session's
-  real state, including "waiting for input".
+- **Claude Code, Codex:** toggle them on in Settings → General (installs the
+  hook). The pet then reflects each session's real state, including "waiting for
+  input".
 - **Any other CLI agent:** `agentpet run -- <command>` (e.g. `agentpet run -- aider`).
 
 ## Workspace layout
@@ -103,10 +103,10 @@ cargo test -p agentpet-core -p agentpet
 
 ## Credits
 
-This project is a Linux port of [AgentPet](https://github.com/ntd4996/agentpet)
+This project takes its idea from [AgentPet](https://github.com/ntd4996/agentpet)
 by [@ntd4996](https://github.com/ntd4996) — the original macOS app that defined
-the concept, agent hook integrations, and pet/monitor UX. All credit for the
-original idea and design goes to that project.
+the concept, agent hook integrations, and pet/monitor UX — and builds an Ubuntu
+version of it. All credit for the original idea and design goes to that project.
 
 ## License
 

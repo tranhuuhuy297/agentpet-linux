@@ -20,15 +20,6 @@ impl AgentCatalog {
         vec![
             AgentIntegration { kind: AgentKind::Claude, display_name: "Claude Code", is_supported: true, note: None },
             AgentIntegration { kind: AgentKind::Codex, display_name: "Codex", is_supported: true, note: None },
-            AgentIntegration { kind: AgentKind::Gemini, display_name: "Gemini CLI", is_supported: true, note: None },
-            AgentIntegration { kind: AgentKind::Cursor, display_name: "Cursor", is_supported: true, note: None },
-            AgentIntegration { kind: AgentKind::Opencode, display_name: "opencode", is_supported: true, note: None },
-            AgentIntegration {
-                kind: AgentKind::Windsurf,
-                display_name: "Windsurf",
-                is_supported: true,
-                note: Some("No \"needs input\" alerts (Windsurf has no such hook)"),
-            },
         ]
     }
 }

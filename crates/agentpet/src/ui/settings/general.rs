@@ -3,9 +3,14 @@
 
 use crate::platform::autostart;
 use agentpet_core::catalog::AgentCatalog;
-use agentpet_core::hooks::{AgentHooks, HookInstaller};
+use agentpet_core::hooks::{AgentHookSpec, AgentHooks, HookInstaller};
 use gtk4::prelude::*;
-use gtk4::{Align, Box as GtkBox, Label, Orientation, PolicyType, ScrolledWindow, Switch};
+use gtk4::{
+    Align, Box as GtkBox, ButtonsType, Label, MessageDialog, MessageType, Orientation, PolicyType,
+    ResponseType, ScrolledWindow, Switch, Window,
+};
+use std::cell::Cell;
+use std::rc::Rc;
 
 pub fn build() -> ScrolledWindow {
     let exe = std::env::current_exe()
@@ -92,20 +97,45 @@ fn agent_row(
 
     let sw = Switch::new();
     sw.set_valign(Align::Center);
-    sw.set_active(HookInstaller::is_installed_on_disk(&spec.settings_path, &spec.events, spec.style));
+    sw.set_active(HookInstaller::is_installed_on_disk(&spec.settings_path, &spec.events));
     {
         let command = command.to_string();
-        let (path, events, style) = (spec.settings_path.clone(), spec.events.clone(), spec.style);
-        sw.connect_state_set(move |_, state| {
-            let result = if state {
-                HookInstaller::install_to_disk(&command, &path, &events, style)
-            } else {
-                HookInstaller::uninstall_from_disk(&path, &events, style)
-            };
-            if let Err(e) = result {
-                eprintln!("agentpet: hook toggle failed: {e}");
+        let display_name = agent.display_name.to_string();
+        // Set while we programmatically drive `set_active` (revert on cancel,
+        // confirm after the dialog) so the handler ignores its own echo instead
+        // of re-running the install/uninstall logic and re-prompting forever.
+        let suppress = Rc::new(Cell::new(false));
+        sw.connect_state_set(move |sw, state| {
+            if suppress.get() {
+                return gtk4::glib::Propagation::Proceed;
             }
-            gtk4::glib::Propagation::Proceed
+
+            // Turning OFF removes the hook directly — no confirmation needed.
+            if !state {
+                if let Err(e) =
+                    HookInstaller::uninstall_from_disk(&spec.settings_path, &spec.events)
+                {
+                    eprintln!("agentpet: hook toggle failed: {e}");
+                }
+                return gtk4::glib::Propagation::Proceed;
+            }
+
+            // Already installed (e.g. healed/echoed): nothing to write or ask.
+            if HookInstaller::is_installed_on_disk(&spec.settings_path, &spec.events) {
+                return gtk4::glib::Propagation::Proceed;
+            }
+
+            // First-time enable: confirm before writing into a file the user
+            // owns. Block the visual flip until they accept; the dialog's async
+            // response drives the switch to its final state.
+            confirm_then_install(
+                sw,
+                &display_name,
+                &command,
+                &spec,
+                suppress.clone(),
+            );
+            gtk4::glib::Propagation::Stop
         });
     }
 
@@ -113,6 +143,61 @@ fn agent_row(
     row.append(&text);
     row.append(&sw);
     row
+}
+
+/// Shows a modal confirmation naming the exact file AgentPet will edit, and
+/// only writes the hook if the user accepts. On cancel the switch is reverted to
+/// OFF. The GTK dialog is async, so the switch's final state and the file write
+/// both happen inside the response handler — never optimistically.
+fn confirm_then_install(
+    sw: &Switch,
+    display_name: &str,
+    command: &str,
+    spec: &AgentHookSpec,
+    suppress: Rc<Cell<bool>>,
+) {
+    let parent = sw.root().and_then(|r| r.downcast::<Window>().ok());
+    let body = format!(
+        "AgentPet will add its hook to:\n{}\n\nYou can turn this off any time.",
+        spec.settings_path.display()
+    );
+    let dialog = MessageDialog::builder()
+        .modal(true)
+        .message_type(MessageType::Question)
+        .buttons(ButtonsType::None)
+        .text(format!("Connect {display_name}?"))
+        .secondary_text(body)
+        .build();
+    if let Some(win) = &parent {
+        dialog.set_transient_for(Some(win));
+    }
+    dialog.add_button("Cancel", ResponseType::Cancel);
+    let connect = dialog.add_button("Connect", ResponseType::Accept);
+    connect.add_css_class("suggested-action");
+    dialog.set_default_response(ResponseType::Accept);
+
+    let sw = sw.clone();
+    let command = command.to_string();
+    let path = spec.settings_path.clone();
+    let events = spec.events.clone();
+    dialog.connect_response(move |dialog, response| {
+        dialog.close();
+        // Guard the programmatic flip so `connect_state_set` doesn't re-run.
+        suppress.set(true);
+        if response == ResponseType::Accept {
+            if let Err(e) = HookInstaller::install_to_disk(&command, &path, &events) {
+                eprintln!("agentpet: hook toggle failed: {e}");
+                sw.set_active(false);
+            } else {
+                sw.set_active(true);
+            }
+        } else {
+            // Declined: leave the file untouched and revert the switch.
+            sw.set_active(false);
+        }
+        suppress.set(false);
+    });
+    dialog.show();
 }
 
 /// Boxed Startup group with the launch-at-login switch.

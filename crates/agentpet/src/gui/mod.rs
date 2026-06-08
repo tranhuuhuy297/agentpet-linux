@@ -15,6 +15,13 @@ pub fn run_gui() -> ExitCode {
     // SAFETY: set before any GDK/display init.
     unsafe { std::env::set_var("GDK_BACKEND", "x11") };
 
+    // A hook stores the absolute binary path captured when the user toggled it
+    // on. If the binary later moves (reinstall to a new prefix, AppImage
+    // remount, manual move) the stored path goes stale while the toggle still
+    // reads as "installed". Heal already-enabled agents to the current path on
+    // startup. Best-effort: never block launch on a config rewrite.
+    resync_agent_hooks();
+
     let (ui_tx, ui_rx) = async_channel::unbounded::<UiUpdate>();
     let (cmd_tx, cmd_rx) = async_channel::unbounded::<UiCommand>();
     // Signals the GTK side to (re)load the selected pet pack after a download.
@@ -100,4 +107,31 @@ pub fn run_gui() -> ExitCode {
     // No positional args — don't treat anything as files to open.
     let _ = app.run_with_args::<&str>(&[]);
     ExitCode::SUCCESS
+}
+
+/// Rewrites every already-enabled agent hook so its embedded binary path points
+/// at the currently running binary. The command is built exactly like the
+/// Settings toggle does, so a healed hook is byte-for-byte what the toggle would
+/// write. `resync_command_to_disk` skips agents that aren't installed, so this
+/// never enables an integration on the user's behalf.
+fn resync_agent_hooks() {
+    use agentpet_core::catalog::AgentCatalog;
+    use agentpet_core::hooks::{AgentHooks, HookInstaller};
+
+    let exe = std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "agentpet".to_string());
+
+    for agent in AgentCatalog::all() {
+        let Some(spec) = AgentHooks::spec(agent.kind) else { continue };
+        let command = format!("\"{}\" hook --agent {}", exe, agent.kind.raw());
+        match HookInstaller::resync_command_to_disk(&command, &spec.settings_path, &spec.events) {
+            Ok(true) => eprintln!(
+                "agentpet: updated {} hook to current binary path",
+                agent.display_name
+            ),
+            Ok(false) => {}
+            Err(e) => eprintln!("agentpet: failed to resync {} hook: {e}", agent.display_name),
+        }
+    }
 }

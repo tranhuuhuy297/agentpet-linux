@@ -62,8 +62,8 @@ mod tests {
     fn decodes_with_project_and_message() {
         let ev = AgentEvent::new(
             "s1",
-            AgentKind::Cursor,
-            "stop",
+            AgentKind::Codex,
+            "Stop",
             Some("/proj".into()),
             Some("Using Bash".into()),
             42.0,

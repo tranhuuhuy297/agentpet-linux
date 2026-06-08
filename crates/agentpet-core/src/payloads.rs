@@ -149,69 +149,13 @@ impl ClaudeHookPayload {
     }
 }
 
-// MARK: - Cursor hook stdin
-
-/// The JSON Cursor writes to a hook's stdin (only the fields AgentPet needs).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct CursorHookPayload {
-    #[serde(default, rename = "conversation_id")]
-    pub conversation_id: Option<String>,
-    #[serde(default, rename = "hook_event_name")]
-    pub hook_event_name: Option<String>,
-    #[serde(default, rename = "workspace_roots")]
-    pub workspace_roots: Option<Vec<String>>,
-}
-
-impl CursorHookPayload {
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        serde_json::from_slice(data).ok()
-    }
-
-    pub fn make_event(&self, now: UnixTime) -> Option<AgentEvent> {
-        let session_id = self.conversation_id.clone()?;
-        let event_name = self.hook_event_name.clone()?;
-        let project = self
-            .workspace_roots
-            .as_ref()
-            .and_then(|roots| roots.first().cloned());
-        Some(AgentEvent::new(session_id, AgentKind::Cursor, event_name, project, None, now))
-    }
-}
-
-// MARK: - Windsurf (Cascade) hook stdin
-
-/// The JSON Windsurf writes to a hook's stdin.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct WindsurfHookPayload {
-    #[serde(default, rename = "trajectory_id")]
-    pub trajectory_id: Option<String>,
-    #[serde(default, rename = "agent_action_name")]
-    pub agent_action_name: Option<String>,
-}
-
-impl WindsurfHookPayload {
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        serde_json::from_slice(data).ok()
-    }
-
-    pub fn make_event(&self, now: UnixTime) -> Option<AgentEvent> {
-        let session_id = self.trajectory_id.clone()?;
-        let event_name = self.agent_action_name.clone()?;
-        Some(AgentEvent::new(session_id, AgentKind::Windsurf, event_name, None, None, now))
-    }
-}
-
-/// Decodes a hook's stdin payload into an event, choosing the field convention
-/// by agent kind. opencode sends explicit flags instead of stdin.
+/// Decodes a hook's stdin payload into an event. Claude Code and Codex share
+/// the same field convention.
 pub struct HookPayload;
 
 impl HookPayload {
     pub fn event(kind: AgentKind, stdin: &[u8], now: UnixTime) -> Option<AgentEvent> {
-        match kind {
-            AgentKind::Cursor => CursorHookPayload::decode(stdin)?.make_event(now),
-            AgentKind::Windsurf => WindsurfHookPayload::decode(stdin)?.make_event(now),
-            _ => ClaudeHookPayload::decode(stdin)?.make_event(now, kind),
-        }
+        ClaudeHookPayload::decode(stdin)?.make_event(now, kind)
     }
 }
 
@@ -243,9 +187,9 @@ mod tests {
     #[test]
     fn hook_args_select_agent() {
         let parsed = HookArguments::parse(&argv(&[
-            "--agent", "opencode", "--event", "working", "--session", "x",
+            "--agent", "codex", "--event", "working", "--session", "x",
         ]));
-        assert_eq!(parsed.make_event(0.0).unwrap().agent_kind, AgentKind::Opencode);
+        assert_eq!(parsed.make_event(0.0).unwrap().agent_kind, AgentKind::Codex);
     }
 
     #[test]
@@ -267,21 +211,12 @@ mod tests {
     }
 
     #[test]
-    fn cursor_payload_decode() {
-        let json = br#"{"conversation_id":"c1","hook_event_name":"stop","workspace_roots":["/proj"],"model":"x"}"#;
-        let ev = HookPayload::event(AgentKind::Cursor, json, 0.0).unwrap();
+    fn codex_payload_decode() {
+        let json = br#"{"session_id":"c1","cwd":"/proj","hook_event_name":"PermissionRequest"}"#;
+        let ev = HookPayload::event(AgentKind::Codex, json, 0.0).unwrap();
         assert_eq!(ev.session_id, "c1");
-        assert_eq!(ev.event_name, "stop");
+        assert_eq!(ev.event_name, "PermissionRequest");
         assert_eq!(ev.project.as_deref(), Some("/proj"));
-        assert_eq!(ev.agent_kind, AgentKind::Cursor);
-    }
-
-    #[test]
-    fn windsurf_payload_decode() {
-        let json = br#"{"trajectory_id":"t1","agent_action_name":"post_cascade_response","model_name":"x"}"#;
-        let ev = HookPayload::event(AgentKind::Windsurf, json, 0.0).unwrap();
-        assert_eq!(ev.session_id, "t1");
-        assert_eq!(ev.event_name, "post_cascade_response");
-        assert_eq!(ev.agent_kind, AgentKind::Windsurf);
+        assert_eq!(ev.agent_kind, AgentKind::Codex);
     }
 }

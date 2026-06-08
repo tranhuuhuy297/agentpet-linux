@@ -11,8 +11,6 @@ impl StateMapper {
     pub fn is_session_end(kind: AgentKind, event_name: &str) -> bool {
         match kind {
             AgentKind::Claude => event_name == "SessionEnd",
-            AgentKind::Gemini => event_name == "SessionEnd",
-            AgentKind::Cursor => event_name == "sessionEnd",
             _ => false,
         }
     }
@@ -39,36 +37,6 @@ impl StateMapper {
                 }
                 "PermissionRequest" => Some(AgentState::Waiting),
                 "Stop" | "SubagentStop" => Some(AgentState::Done),
-                _ => None,
-            },
-            AgentKind::Gemini => match event_name {
-                "SessionStart" => Some(AgentState::Registered),
-                "BeforeAgent" | "BeforeModel" | "BeforeTool" | "AfterTool"
-                | "BeforeToolSelection" | "AfterModel" => Some(AgentState::Working),
-                "Notification" => Some(AgentState::Waiting),
-                "AfterAgent" | "SessionEnd" => Some(AgentState::Done),
-                _ => None,
-            },
-            AgentKind::Cursor => match event_name {
-                "sessionStart" => Some(AgentState::Registered),
-                "beforeSubmitPrompt" | "preToolUse" | "beforeShellExecution" => {
-                    Some(AgentState::Working)
-                }
-                "stop" | "subagentStop" | "sessionEnd" => Some(AgentState::Done),
-                _ => None,
-            },
-            AgentKind::Windsurf => match event_name {
-                "pre_user_prompt" => Some(AgentState::Working),
-                "post_cascade_response" | "post_cascade_response_with_transcript" => {
-                    Some(AgentState::Done)
-                }
-                _ => None,
-            },
-            AgentKind::Opencode => match event_name {
-                // The plugin sends normalised states directly (handled above);
-                // these map the raw opencode event names as a fallback.
-                "session.created" => Some(AgentState::Working),
-                "session.idle" => Some(AgentState::Done),
                 _ => None,
             },
             AgentKind::Cli | AgentKind::Unknown => None,
@@ -114,33 +82,8 @@ mod tests {
     }
 
     #[test]
-    fn gemini_mapping() {
-        assert_eq!(StateMapper::state(AgentKind::Gemini, "BeforeTool"), Some(AgentState::Working));
-        assert_eq!(StateMapper::state(AgentKind::Gemini, "Notification"), Some(AgentState::Waiting));
-        assert_eq!(StateMapper::state(AgentKind::Gemini, "AfterAgent"), Some(AgentState::Done));
-    }
-
-    #[test]
-    fn cursor_and_windsurf_mapping() {
-        assert_eq!(StateMapper::state(AgentKind::Cursor, "sessionStart"), Some(AgentState::Registered));
-        assert_eq!(StateMapper::state(AgentKind::Cursor, "beforeSubmitPrompt"), Some(AgentState::Working));
-        assert_eq!(StateMapper::state(AgentKind::Cursor, "stop"), Some(AgentState::Done));
-        assert_eq!(StateMapper::state(AgentKind::Windsurf, "pre_user_prompt"), Some(AgentState::Working));
-        assert_eq!(StateMapper::state(AgentKind::Windsurf, "post_cascade_response"), Some(AgentState::Done));
-    }
-
-    #[test]
-    fn opencode_normalised_state_pass_through() {
-        assert_eq!(StateMapper::state(AgentKind::Opencode, "done"), Some(AgentState::Done));
-        assert_eq!(StateMapper::state(AgentKind::Opencode, "working"), Some(AgentState::Working));
-        assert_eq!(StateMapper::state(AgentKind::Opencode, "session.idle"), Some(AgentState::Done));
-    }
-
-    #[test]
     fn is_session_end() {
         assert!(StateMapper::is_session_end(AgentKind::Claude, "SessionEnd"));
-        assert!(StateMapper::is_session_end(AgentKind::Gemini, "SessionEnd"));
-        assert!(StateMapper::is_session_end(AgentKind::Cursor, "sessionEnd"));
         assert!(!StateMapper::is_session_end(AgentKind::Claude, "Stop"));
         assert!(!StateMapper::is_session_end(AgentKind::Codex, "Stop"));
     }

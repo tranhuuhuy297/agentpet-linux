@@ -25,8 +25,8 @@ pub enum AgentState {
 }
 
 impl AgentState {
-    /// Parses a normalised state name (used by the `run` wrapper / opencode
-    /// plugin, which send state names directly).
+    /// Parses a normalised state name (used by the `run` wrapper, which sends
+    /// state names directly).
     pub fn from_raw(s: &str) -> Option<Self> {
         match s {
             "registered" => Some(Self::Registered),
@@ -56,10 +56,6 @@ impl AgentState {
 pub enum AgentKind {
     Claude,
     Codex,
-    Gemini,
-    Cursor,
-    Opencode,
-    Windsurf,
     /// Any CLI agent launched via the `agentpet run` wrapper.
     Cli,
     Unknown,
@@ -70,10 +66,6 @@ impl AgentKind {
         match s {
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
-            "gemini" => Some(Self::Gemini),
-            "cursor" => Some(Self::Cursor),
-            "opencode" => Some(Self::Opencode),
-            "windsurf" => Some(Self::Windsurf),
             "cli" => Some(Self::Cli),
             "unknown" => Some(Self::Unknown),
             _ => None,
@@ -84,10 +76,6 @@ impl AgentKind {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
-            Self::Gemini => "gemini",
-            Self::Cursor => "cursor",
-            Self::Opencode => "opencode",
-            Self::Windsurf => "windsurf",
             Self::Cli => "cli",
             Self::Unknown => "unknown",
         }
@@ -154,10 +142,6 @@ mod tests {
         for k in [
             AgentKind::Claude,
             AgentKind::Codex,
-            AgentKind::Gemini,
-            AgentKind::Cursor,
-            AgentKind::Opencode,
-            AgentKind::Windsurf,
             AgentKind::Cli,
             AgentKind::Unknown,
         ] {
@@ -168,8 +152,8 @@ mod tests {
     #[test]
     fn kind_serializes_lowercase() {
         assert_eq!(
-            serde_json::to_string(&AgentKind::Opencode).unwrap(),
-            "\"opencode\""
+            serde_json::to_string(&AgentKind::Codex).unwrap(),
+            "\"codex\""
         );
     }
 }

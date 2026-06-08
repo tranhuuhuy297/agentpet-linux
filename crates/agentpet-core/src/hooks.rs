@@ -1,34 +1,19 @@
 //! Installs/removes AgentPet's hook entries in an agent's config. Ports
 //! `HookInstaller.swift` and `AgentHooks.swift`.
 //!
-//! Claude Code, Codex, and Gemini share the nested `{"hooks": {...}}` shape;
-//! Cursor and Windsurf use flatter shapes; opencode uses a generated JS plugin
-//! file. The dictionary transforms are pure (and tested); the `*_to_disk`
-//! helpers wrap them with file IO. Our entries are identified by their command
-//! string, so install is idempotent and foreign hooks are never touched.
+//! Claude Code and Codex share the nested `{"hooks": {...}}` shape. The
+//! dictionary transforms are pure (and tested); the `*_to_disk` helpers wrap
+//! them with file IO. Our entries are identified by their command string, so
+//! install is idempotent and foreign hooks are never touched.
 
 use crate::state::AgentKind;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
-/// How an agent's hook configuration is written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookStyle {
-    /// Claude / Codex / Gemini: `{"hooks": {Event: [{"hooks": [{"type": "command", "command": ...}]}]}}`.
-    ClaudeNested,
-    /// Cursor `~/.cursor/hooks.json`: `{"version": 1, "hooks": {event: [{"command": ..., "type": "command"}]}}`.
-    CursorFlat,
-    /// Windsurf `~/.codeium/windsurf/hooks.json`: `{"hooks": {event: [{"command": ..., "show_output": false}]}}`.
-    WindsurfFlat,
-    /// opencode: a JS plugin file dropped in `~/.config/opencode/plugin/`.
-    OpencodePlugin,
-}
-
 /// Where and which lifecycle events to register for an agent.
 #[derive(Debug, Clone)]
 pub struct AgentHookSpec {
     pub kind: AgentKind,
-    pub style: HookStyle,
     pub events: Vec<&'static str>,
     pub settings_path: PathBuf,
 }
@@ -41,7 +26,6 @@ impl AgentHooks {
         let spec = match kind {
             AgentKind::Claude => AgentHookSpec {
                 kind,
-                style: HookStyle::ClaudeNested,
                 events: vec![
                     "SessionStart", "UserPromptSubmit", "PreToolUse", "Notification", "Stop",
                     "SubagentStop", "SessionEnd",
@@ -50,44 +34,11 @@ impl AgentHooks {
             },
             AgentKind::Codex => AgentHookSpec {
                 kind,
-                style: HookStyle::ClaudeNested,
                 events: vec![
                     "SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "Stop",
                     "SubagentStop",
                 ],
                 settings_path: home.join(".codex/hooks.json"),
-            },
-            AgentKind::Gemini => AgentHookSpec {
-                kind,
-                style: HookStyle::ClaudeNested,
-                events: vec![
-                    "SessionStart", "BeforeAgent", "BeforeTool", "AfterTool", "Notification",
-                    "AfterAgent", "SessionEnd",
-                ],
-                settings_path: home.join(".gemini/settings.json"),
-            },
-            AgentKind::Cursor => AgentHookSpec {
-                kind,
-                style: HookStyle::CursorFlat,
-                events: vec![
-                    "sessionStart", "beforeSubmitPrompt", "preToolUse", "stop", "subagentStop",
-                    "sessionEnd",
-                ],
-                settings_path: home.join(".cursor/hooks.json"),
-            },
-            AgentKind::Windsurf => AgentHookSpec {
-                kind,
-                style: HookStyle::WindsurfFlat,
-                events: vec!["pre_user_prompt", "post_cascade_response"],
-                settings_path: home.join(".codeium/windsurf/hooks.json"),
-            },
-            AgentKind::Opencode => AgentHookSpec {
-                kind,
-                style: HookStyle::OpencodePlugin,
-                // The JS plugin hardcodes its own session.created/session.idle
-                // hooks, so no event list is registered through the installer.
-                events: vec![],
-                settings_path: home.join(".config/opencode/plugin/agentpet.js"),
             },
             AgentKind::Cli | AgentKind::Unknown => return None,
         };
@@ -112,7 +63,7 @@ impl HookInstaller {
         command.contains("agentpet") && command.contains("hook")
     }
 
-    // MARK: - Claude-nested shape (Claude / Codex / Gemini)
+    // MARK: - Claude-nested shape (Claude / Codex)
 
     pub fn is_installed(settings: &Value, events: &[&str]) -> bool {
         let Some(hooks) = settings.get("hooks").and_then(|v| v.as_object()) else {
@@ -178,115 +129,6 @@ impl HookInstaller {
             .unwrap_or(false)
     }
 
-    // MARK: - Flat shape (Cursor / Windsurf)
-
-    fn flat_item_is_ours(item: &Value) -> bool {
-        item.get("command")
-            .and_then(|c| c.as_str())
-            .map(Self::is_ours)
-            .unwrap_or(false)
-    }
-
-    pub fn install_flat(settings: Value, command: &str, events: &[&str], style: HookStyle) -> Value {
-        let mut s = into_object(settings);
-        if style == HookStyle::CursorFlat {
-            s.entry("version".to_string()).or_insert(json!(1));
-        }
-        let mut hooks = take_object(&mut s, "hooks");
-        for &event in events {
-            let mut items: Vec<Value> = take_array(&mut hooks, event)
-                .into_iter()
-                .filter(|it| !Self::flat_item_is_ours(it))
-                .collect();
-            let mut entry = Map::new();
-            entry.insert("command".to_string(), json!(command));
-            match style {
-                HookStyle::CursorFlat => {
-                    entry.insert("type".to_string(), json!("command"));
-                }
-                HookStyle::WindsurfFlat => {
-                    entry.insert("show_output".to_string(), json!(false));
-                }
-                _ => {}
-            }
-            items.push(Value::Object(entry));
-            hooks.insert(event.to_string(), Value::Array(items));
-        }
-        s.insert("hooks".to_string(), Value::Object(hooks));
-        Value::Object(s)
-    }
-
-    pub fn uninstall_flat(settings: Value, events: &[&str]) -> Value {
-        let mut s = into_object(settings);
-        let mut hooks = match s.remove("hooks") {
-            Some(Value::Object(m)) => m,
-            _ => return Value::Object(s),
-        };
-        for &event in events {
-            if let Some(Value::Array(items)) = hooks.remove(event) {
-                let kept: Vec<Value> =
-                    items.into_iter().filter(|it| !Self::flat_item_is_ours(it)).collect();
-                if !kept.is_empty() {
-                    hooks.insert(event.to_string(), Value::Array(kept));
-                }
-            }
-        }
-        if !hooks.is_empty() {
-            s.insert("hooks".to_string(), Value::Object(hooks));
-        }
-        Value::Object(s)
-    }
-
-    pub fn is_installed_flat(settings: &Value, events: &[&str]) -> bool {
-        let Some(hooks) = settings.get("hooks").and_then(|v| v.as_object()) else {
-            return false;
-        };
-        events.iter().any(|event| {
-            hooks
-                .get(*event)
-                .and_then(|v| v.as_array())
-                .map(|items| items.iter().any(Self::flat_item_is_ours))
-                .unwrap_or(false)
-        })
-    }
-
-    // MARK: - opencode JS plugin
-
-    /// Extracts the agentpet binary path from a hook command like
-    /// `"/path/to/agentpet" hook --agent opencode` (the first quoted token).
-    pub fn binary_path(command: &str) -> String {
-        if let Some(first) = command.find('"') {
-            let rest = &command[first + 1..];
-            if let Some(second) = rest.find('"') {
-                return rest[..second].to_string();
-            }
-        }
-        command.split(' ').next().unwrap_or(command).to_string()
-    }
-
-    pub fn opencode_plugin(binary: &str) -> String {
-        let bin = js_string(binary);
-        format!(
-            r#"// AgentPet integration (auto-generated, safe to delete to uninstall).
-// Reports opencode session lifecycle to AgentPet's menu bar app.
-const AGENTPET_BIN = {bin}
-export const AgentPet = async ({{ directory }}) => {{
-  const sid = "opencode:" + (directory || "default")
-  const send = (state) => {{
-    try {{
-      Bun.spawn([AGENTPET_BIN, "hook", "--agent", "opencode",
-                 "--event", state, "--session", sid, "--project", directory || ""])
-    }} catch (e) {{}}
-  }}
-  return {{
-    "session.created": async () => {{ send("working") }},
-    "session.idle": async () => {{ send("done") }},
-  }}
-}}
-"#
-        )
-    }
-
     // MARK: - Disk IO
 
     pub fn read_settings(path: &Path) -> Value {
@@ -299,74 +141,114 @@ export const AgentPet = async ({{ directory }}) => {{
 
     /// Writes pretty-printed, sorted-key JSON (serde_json's default Map is a
     /// BTreeMap, so keys are emitted sorted — matching the macOS `.sortedKeys`).
+    ///
+    /// We edit a config the user owns and that other tools also write to, so
+    /// before clobbering an existing file we snapshot it to `<name>.bak`. The
+    /// suffix is appended to the full filename (`settings.json` ->
+    /// `settings.json.bak`) rather than replacing the extension, so the backup
+    /// is unambiguously the same file. The backup is best-effort: a failed copy
+    /// must never block the write the user asked for.
     pub fn write_settings(settings: &Value, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
+        }
+        if path.exists() {
+            let backup = backup_path(path);
+            if let Err(e) = std::fs::copy(path, &backup) {
+                eprintln!("agentpet: failed to back up {}: {e}", path.display());
+            }
         }
         let data = serde_json::to_vec_pretty(settings).map_err(std::io::Error::other)?;
         std::fs::write(path, data)
     }
 
-    pub fn install_to_disk(
+    pub fn install_to_disk(command: &str, path: &Path, events: &[&str]) -> std::io::Result<()> {
+        let updated = Self::install(Self::read_settings(path), command, events);
+        Self::write_settings(&updated, path)
+    }
+
+    pub fn uninstall_from_disk(path: &Path, events: &[&str]) -> std::io::Result<()> {
+        let updated = Self::uninstall(Self::read_settings(path), events);
+        Self::write_settings(&updated, path)
+    }
+
+    pub fn is_installed_on_disk(path: &Path, events: &[&str]) -> bool {
+        Self::is_installed(&Self::read_settings(path), events)
+    }
+
+    /// Whether the *exact* desired command is already registered. Unlike
+    /// `is_installed` (which matches any "agentpet"+"hook" entry, regardless of
+    /// the embedded binary path), this checks the full command string. It is how
+    /// we tell a stale hook — pointing at an old binary path — apart from a
+    /// current one that needs no rewrite.
+    pub fn is_installed_with_command(settings: &Value, events: &[&str], command: &str) -> bool {
+        let Some(hooks) = settings.get("hooks").and_then(|v| v.as_object()) else {
+            return false;
+        };
+        events.iter().all(|event| {
+            hooks
+                .get(*event)
+                .and_then(|v| v.as_array())
+                .map(|groups| groups.iter().any(|g| group_has_command(g, command)))
+                .unwrap_or(false)
+        })
+    }
+
+    pub fn is_installed_with_command_on_disk(
+        path: &Path,
+        events: &[&str],
+        command: &str,
+    ) -> bool {
+        Self::is_installed_with_command(&Self::read_settings(path), events, command)
+    }
+
+    /// Self-heals a hook whose embedded binary path drifted from the running
+    /// binary (moved install, AppImage remount, etc.).
+    ///
+    /// Two invariants make this safe to call unconditionally on every startup:
+    /// - It only acts when our hook is *already* installed, so it never enables
+    ///   an integration the user didn't turn on themselves.
+    /// - It only rewrites when the exact desired command is absent, so a hook
+    ///   that already matches is left untouched — avoiding needless `.bak`
+    ///   churn from the backup-on-write behaviour.
+    ///
+    /// Returns `Ok(true)` when it rewrote the file (healed), `Ok(false)` when it
+    /// left the file alone.
+    pub fn resync_command_to_disk(
         command: &str,
         path: &Path,
         events: &[&str],
-        style: HookStyle,
-    ) -> std::io::Result<()> {
-        match style {
-            HookStyle::ClaudeNested => {
-                let updated = Self::install(Self::read_settings(path), command, events);
-                Self::write_settings(&updated, path)
-            }
-            HookStyle::CursorFlat | HookStyle::WindsurfFlat => {
-                let updated = Self::install_flat(Self::read_settings(path), command, events, style);
-                Self::write_settings(&updated, path)
-            }
-            HookStyle::OpencodePlugin => {
-                if let Some(dir) = path.parent() {
-                    std::fs::create_dir_all(dir)?;
-                }
-                let js = Self::opencode_plugin(&Self::binary_path(command));
-                std::fs::write(path, js)
-            }
+    ) -> std::io::Result<bool> {
+        let settings = Self::read_settings(path);
+        if !Self::is_installed(&settings, events) {
+            return Ok(false);
         }
-    }
-
-    pub fn uninstall_from_disk(path: &Path, events: &[&str], style: HookStyle) -> std::io::Result<()> {
-        match style {
-            HookStyle::ClaudeNested => {
-                let updated = Self::uninstall(Self::read_settings(path), events);
-                Self::write_settings(&updated, path)
-            }
-            HookStyle::CursorFlat | HookStyle::WindsurfFlat => {
-                let updated = Self::uninstall_flat(Self::read_settings(path), events);
-                Self::write_settings(&updated, path)
-            }
-            HookStyle::OpencodePlugin => {
-                if Self::is_installed_on_disk(path, events, style) {
-                    let _ = std::fs::remove_file(path);
-                }
-                Ok(())
-            }
+        if Self::is_installed_with_command(&settings, events, command) {
+            return Ok(false);
         }
-    }
-
-    pub fn is_installed_on_disk(path: &Path, events: &[&str], style: HookStyle) -> bool {
-        match style {
-            HookStyle::ClaudeNested => Self::is_installed(&Self::read_settings(path), events),
-            HookStyle::CursorFlat | HookStyle::WindsurfFlat => {
-                Self::is_installed_flat(&Self::read_settings(path), events)
-            }
-            HookStyle::OpencodePlugin => std::fs::read_to_string(path)
-                .map(|s| Self::is_ours(&s))
-                .unwrap_or(false),
-        }
+        Self::install_to_disk(command, path, events)?;
+        Ok(true)
     }
 }
 
-/// JSON-encodes a string for safe embedding in JS source.
-fn js_string(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\""))
+/// Appends `.bak` to the full filename (keeping the original extension) so the
+/// backup sits beside the original as an obvious sibling.
+fn backup_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
+fn group_has_command(group: &Value, command: &str) -> bool {
+    group
+        .get("hooks")
+        .and_then(|v| v.as_array())
+        .map(|inner| {
+            inner.iter().any(|item| {
+                item.get("command").and_then(|c| c.as_str()) == Some(command)
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn into_object(value: Value) -> Map<String, Value> {
@@ -394,9 +276,7 @@ fn take_array(map: &mut Map<String, Value>, key: &str) -> Vec<Value> {
 mod tests {
     use super::*;
 
-    const CMD: &str = "\"/opt/agentpet/agentpet\" hook --agent cursor";
-
-    // MARK: - Claude-nested shape
+    const CMD: &str = "\"/opt/agentpet/agentpet\" hook --agent claude";
 
     #[test]
     fn claude_install_idempotent_and_foreign_preserved() {
@@ -415,95 +295,72 @@ mod tests {
         assert!(!HookInstaller::is_installed(&removed, &ev));
     }
 
-    // MARK: - Cursor flat shape
-
     #[test]
-    fn cursor_install_shape() {
-        let events = AgentHooks::spec(AgentKind::Cursor).unwrap().events;
-        let ev: Vec<&str> = events.iter().copied().collect();
-        let result = HookInstaller::install_flat(json!({}), CMD, &ev, HookStyle::CursorFlat);
-        assert_eq!(result["version"].as_i64(), Some(1));
-        assert!(HookInstaller::is_installed_flat(&result, &ev));
-        let stop = result["hooks"]["stop"].as_array().unwrap();
-        assert_eq!(stop.len(), 1);
-        assert_eq!(stop[0]["type"].as_str(), Some("command"));
-        assert!(stop[0]["command"].as_str().unwrap().contains("agentpet"));
-    }
-
-    #[test]
-    fn cursor_idempotent_and_foreign_preserved() {
-        let events = AgentHooks::spec(AgentKind::Cursor).unwrap().events;
-        let ev: Vec<&str> = events.iter().copied().collect();
-        let existing = json!({"hooks": {"stop": [{"command": "echo hi"}]}});
-        let once = HookInstaller::install_flat(existing, CMD, &ev, HookStyle::CursorFlat);
-        let twice = HookInstaller::install_flat(once, CMD, &ev, HookStyle::CursorFlat);
-        let stop = twice["hooks"]["stop"].as_array().unwrap();
-        assert_eq!(stop.len(), 2, "foreign + ours, no duplicate");
-        let removed = HookInstaller::uninstall_flat(twice, &ev);
-        let stop_after = removed["hooks"]["stop"].as_array().unwrap();
-        assert_eq!(stop_after.len(), 1, "foreign kept");
-        assert!(!HookInstaller::is_installed_flat(&removed, &ev));
-    }
-
-    // MARK: - Windsurf flat shape
-
-    #[test]
-    fn windsurf_install_shape() {
-        let events = AgentHooks::spec(AgentKind::Windsurf).unwrap().events;
-        let ev: Vec<&str> = events.iter().copied().collect();
-        let cmd = "\"/x/agentpet\" hook --agent windsurf";
-        let result = HookInstaller::install_flat(json!({}), cmd, &ev, HookStyle::WindsurfFlat);
-        assert!(result.get("version").is_none(), "Windsurf has no version field");
-        let resp = result["hooks"]["post_cascade_response"].as_array().unwrap();
-        assert_eq!(resp[0]["command"].as_str(), Some(cmd));
-        assert_eq!(resp[0]["show_output"].as_bool(), Some(false));
-        assert!(HookInstaller::is_installed_flat(&result, &ev));
-    }
-
-    // MARK: - opencode plugin
-
-    #[test]
-    fn opencode_binary_path_extraction() {
-        assert_eq!(
-            HookInstaller::binary_path("\"/opt/agentpet/agentpet\" hook --agent opencode"),
-            "/opt/agentpet/agentpet"
-        );
-        assert_eq!(HookInstaller::binary_path("/usr/bin/agentpet hook"), "/usr/bin/agentpet");
-    }
-
-    #[test]
-    fn opencode_plugin_content() {
-        let js = HookInstaller::opencode_plugin("/x/agentpet");
-        assert!(js.contains("session.idle"));
-        assert!(js.contains("session.created"));
-        assert!(js.contains("--agent"));
-        assert!(js.contains("opencode"));
-        assert!(HookInstaller::is_ours(&js.replace('\n', " ")));
-    }
-
-    // MARK: - Disk round-trip for each style
-
-    #[test]
-    fn disk_round_trip_all_styles() {
+    fn disk_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
-        let cases = [
-            (AgentKind::Claude, "claude.json"),
-            (AgentKind::Cursor, "cursor.json"),
-            (AgentKind::Windsurf, "windsurf.json"),
-            (AgentKind::Opencode, "plugin/agentpet.js"),
-        ];
-        for (kind, file) in cases {
+        for (kind, file) in [(AgentKind::Claude, "claude.json"), (AgentKind::Codex, "codex.json")] {
             let spec = AgentHooks::spec(kind).unwrap();
             let ev: Vec<&str> = spec.events.iter().copied().collect();
             let path = tmp.path().join(file);
             let command = format!("\"/opt/agentpet/agentpet\" hook --agent {}", kind.raw());
 
-            assert!(!HookInstaller::is_installed_on_disk(&path, &ev, spec.style), "{kind:?} clean");
-            HookInstaller::install_to_disk(&command, &path, &ev, spec.style).unwrap();
-            assert!(HookInstaller::is_installed_on_disk(&path, &ev, spec.style), "{kind:?} installed");
-            HookInstaller::uninstall_from_disk(&path, &ev, spec.style).unwrap();
-            assert!(!HookInstaller::is_installed_on_disk(&path, &ev, spec.style), "{kind:?} removed");
+            assert!(!HookInstaller::is_installed_on_disk(&path, &ev), "{kind:?} clean");
+            HookInstaller::install_to_disk(&command, &path, &ev).unwrap();
+            assert!(HookInstaller::is_installed_on_disk(&path, &ev), "{kind:?} installed");
+            HookInstaller::uninstall_from_disk(&path, &ev).unwrap();
+            assert!(!HookInstaller::is_installed_on_disk(&path, &ev), "{kind:?} removed");
         }
+    }
+
+    #[test]
+    fn write_backs_up_existing_file_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("settings.json");
+        let bak = tmp.path().join("settings.json.bak");
+
+        // Fresh path: no backup is created.
+        HookInstaller::write_settings(&json!({"v": 1}), &path).unwrap();
+        assert!(!bak.exists(), "no backup for a non-existent target");
+        assert!(path.exists());
+
+        // Overwriting: the OLD content lands in the sibling `.bak`.
+        let old = std::fs::read_to_string(&path).unwrap();
+        HookInstaller::write_settings(&json!({"v": 2}), &path).unwrap();
+        assert!(bak.exists(), "backup created before clobber");
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), old, "backup holds old content");
+        assert_ne!(std::fs::read_to_string(&path).unwrap(), old, "target was rewritten");
+    }
+
+    #[test]
+    fn resync_heals_stale_path_noop_when_current_or_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ev: Vec<&str> = AgentHooks::spec(AgentKind::Claude)
+            .unwrap()
+            .events
+            .iter()
+            .copied()
+            .collect();
+
+        let old_cmd = "\"/old/path/agentpet\" hook --agent claude";
+        let new_cmd = "\"/new/path/agentpet\" hook --agent claude";
+
+        // (c) Not installed → resync is a no-op and writes nothing.
+        let absent = tmp.path().join("absent.json");
+        assert!(!HookInstaller::resync_command_to_disk(new_cmd, &absent, &ev).unwrap());
+        assert!(!absent.exists(), "resync must not create hooks the user never enabled");
+
+        // (a) Installed with an OLD path → resync rewrites to the new command.
+        let path = tmp.path().join("settings.json");
+        HookInstaller::install_to_disk(old_cmd, &path, &ev).unwrap();
+        assert!(!HookInstaller::is_installed_with_command_on_disk(&path, &ev, new_cmd));
+        assert!(HookInstaller::resync_command_to_disk(new_cmd, &path, &ev).unwrap(), "healed");
+        assert!(HookInstaller::is_installed_with_command_on_disk(&path, &ev, new_cmd));
+        assert!(!HookInstaller::is_installed_with_command_on_disk(&path, &ev, old_cmd));
+
+        // (b) Installed with the CORRECT command → resync is a no-op, file unchanged.
+        let before = std::fs::read_to_string(&path).unwrap();
+        assert!(!HookInstaller::resync_command_to_disk(new_cmd, &path, &ev).unwrap(), "no-op");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "file untouched when current");
     }
 
     #[test]

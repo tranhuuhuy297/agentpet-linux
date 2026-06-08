@@ -18,10 +18,10 @@ pub fn run() -> ExitCode {
 
     for agent in AgentCatalog::all() {
         let Some(spec) = AgentHooks::spec(agent.kind) else { continue };
-        if !HookInstaller::is_installed_on_disk(&spec.settings_path, &spec.events, spec.style) {
+        if !HookInstaller::is_installed_on_disk(&spec.settings_path, &spec.events) {
             continue;
         }
-        match HookInstaller::uninstall_from_disk(&spec.settings_path, &spec.events, spec.style) {
+        match HookInstaller::uninstall_from_disk(&spec.settings_path, &spec.events) {
             Ok(()) => {
                 println!("removed {} hooks ({})", agent.display_name, spec.settings_path.display());
                 removed += 1;
