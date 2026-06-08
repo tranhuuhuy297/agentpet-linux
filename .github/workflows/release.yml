@@ -1,0 +1,52 @@
+# Builds the release binary and publishes a GitHub Release on every `v*` tag.
+# The tarball is named with the target triple so `agentpet update`
+# (self_update, bin_name `agentpet`) can locate and unpack it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev libadwaita-1-dev build-essential pkg-config \
+            libasound2-dev libx11-dev libxcb1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release -p agentpet
+
+      - name: Package tarball
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          asset="agentpet-${tag}-x86_64-unknown-linux-gnu.tar.gz"
+          tar -czf "$asset" -C target/release agentpet
+          echo "ASSET=$asset" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+          generate_release_notes: true
