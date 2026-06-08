@@ -136,7 +136,8 @@ fn emit(store: &Store, sink: &Sink) {
 }
 
 /// Drains queued event files (written while the daemon was down) in name order,
-/// applying each with its *original* timestamp, then removing the file.
+/// applying each fresh-enough one with its *original* timestamp and removing
+/// every file. Files past the replay window are deleted without applying.
 fn drain_queue(store: &Store) {
     let dir = ipc::queue_dir();
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -144,10 +145,20 @@ fn drain_queue(store: &Store) {
     };
     let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
     paths.sort();
+    let now = crate::unix_now();
     for path in paths {
-        if let Ok(data) = std::fs::read(&path) {
-            for ev in ipc::decode_lines(&data) {
-                store.lock().unwrap().apply(&ev, ev.timestamp);
+        // Skip events too old to matter (they'd be pruned on apply anyway), but
+        // still delete the file so the queue is left empty.
+        let expired = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| ipc::queue_file_expired(n, now))
+            .unwrap_or(false);
+        if !expired {
+            if let Ok(data) = std::fs::read(&path) {
+                for ev in ipc::decode_lines(&data) {
+                    store.lock().unwrap().apply(&ev, ev.timestamp);
+                }
             }
         }
         let _ = std::fs::remove_file(&path);
