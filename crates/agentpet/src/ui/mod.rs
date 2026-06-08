@@ -11,6 +11,7 @@ pub mod tray;
 
 use crate::pet::PetWindow;
 use crate::snapshot::{GalleryRequest, GalleryResult, UiCommand, UiUpdate};
+use agentpet_core::catalog::AgentCatalog;
 use agentpet_core::config::Config;
 use agentpet_core::sprite::{load_pack, PetPack};
 use agentpet_core::state::AgentKind;
@@ -94,7 +95,12 @@ impl Ui {
             if let Some(pet) = pets.get(kind) {
                 pet.set_mood(*mood);
             } else {
-                let pet = PetWindow::new(&self.app, self.cmd.clone(), kind_slot(*kind));
+                let pet = PetWindow::new(
+                    &self.app,
+                    self.cmd.clone(),
+                    kind_slot(*kind),
+                    agent_display_name(*kind),
+                );
                 pet.set_pack(load_pack_for_kind(*kind).as_ref());
                 pet.set_mood(*mood);
                 pets.insert(*kind, pet);
@@ -114,6 +120,19 @@ impl Ui {
             pet.set_pack(load_pack_for_kind(*kind).as_ref());
         }
     }
+}
+
+/// Human-readable agent name drawn under its pet. Uses the Settings catalog
+/// name where available, with fallbacks for the wrapper-only kinds.
+fn agent_display_name(kind: AgentKind) -> &'static str {
+    AgentCatalog::all()
+        .into_iter()
+        .find(|a| a.kind == kind)
+        .map(|a| a.display_name)
+        .unwrap_or(match kind {
+            AgentKind::Cli => "CLI",
+            _ => "Agent",
+        })
 }
 
 /// Stable horizontal placement slot for an agent's pet, so each agent keeps a

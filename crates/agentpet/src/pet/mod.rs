@@ -44,8 +44,15 @@ pub struct PetWindow {
 
 impl PetWindow {
     /// Creates a pet window. `slot` (0, 1, 2, …) staggers its initial position so
-    /// each agent's pet starts in a distinct, non-overlapping spot.
-    pub fn new(app: &Application, cmd: async_channel::Sender<UiCommand>, slot: i32) -> Self {
+    /// each agent's pet starts in a distinct, non-overlapping spot. `label` names
+    /// the agent (e.g. "Claude Code"), drawn as a caption so identical pet packs
+    /// stay tellable apart.
+    pub fn new(
+        app: &Application,
+        cmd: async_channel::Sender<UiCommand>,
+        slot: i32,
+        label: &str,
+    ) -> Self {
         let window = ApplicationWindow::builder()
             .application(app)
             .title("AgentPet")
@@ -71,8 +78,10 @@ impl PetWindow {
         {
             let (mood, phase, clips, bindings) =
                 (mood.clone(), phase.clone(), clips.clone(), bindings.clone());
+            let label = label.to_string();
             area.set_draw_func(move |_, cr, w, h| {
                 draw(cr, w, h, mood.get(), phase.get(), &clips.borrow(), &bindings.borrow());
+                draw_label(cr, w, h, &label);
             });
         }
         {
@@ -262,6 +271,43 @@ fn draw_blob(cr: &CairoContext, w: i32, h: i32, mood: PetMood, bob: f64) {
         cr.set_source_rgba(0.05, 0.1, 0.15, 1.0);
         let _ = cr.fill();
     }
+}
+
+/// Draws the agent name as a translucent pill caption at the bottom of the pet,
+/// so multiple pets (especially ones sharing a pack) stay identifiable.
+fn draw_label(cr: &CairoContext, w: i32, h: i32, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let (w, h) = (w as f64, h as f64);
+    cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
+    cr.set_font_size(13.0);
+    let Ok(ext) = cr.text_extents(text) else { return };
+
+    let (pad_x, pad_y) = (8.0, 4.0);
+    let bw = ext.width() + pad_x * 2.0;
+    let bh = ext.height() + pad_y * 2.0;
+    let bx = (w - bw) / 2.0;
+    let by = h - bh - 2.0;
+
+    rounded_rect(cr, bx, by, bw, bh, bh / 2.0);
+    cr.set_source_rgba(0.08, 0.09, 0.12, 0.66);
+    let _ = cr.fill();
+
+    cr.set_source_rgba(0.96, 0.97, 1.0, 0.96);
+    cr.move_to(bx + pad_x - ext.x_bearing(), by + pad_y - ext.y_bearing());
+    let _ = cr.show_text(text);
+}
+
+fn rounded_rect(cr: &CairoContext, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let r = r.min(w / 2.0).min(h / 2.0);
+    cr.new_sub_path();
+    cr.arc(x + w - r, y + r, r, -FRAC_PI_2, 0.0);
+    cr.arc(x + w - r, y + h - r, r, 0.0, FRAC_PI_2);
+    cr.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
+    cr.arc(x + r, y + r, r, PI, 3.0 * FRAC_PI_2);
+    cr.close_path();
 }
 
 fn mood_color(mood: PetMood) -> (f64, f64, f64) {
