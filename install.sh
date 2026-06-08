@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
-# Install or uninstall AgentPet for the current user under ~/.local. No root.
+# Install or uninstall AgentPet for the current user under ~/.local. No root
+# (sudo is used only to pull the GTK4 runtime/dev libs when they are missing).
 #
-#   ./install.sh              build release + install (default)
+#   ./install.sh              download the prebuilt release binary + install
+#   ./install.sh --source     build from source instead (needs the cloned repo)
 #   ./install.sh uninstall    remove hooks/autostart + installed files
 #
-# Uninstall also wipes ~/.agentpet (socket, queue, downloaded pets). Pass
-# --keep-data to preserve it. Prereq for install: the GTK4 dev packages (README).
+# Works piped straight from the web (no clone needed):
+#   curl -fsSL https://raw.githubusercontent.com/tranhuuhuy297/agentpet-linux/main/install.sh | bash
+#
+# Uninstall also wipes ~/.agentpet (socket, queue, downloaded pets); pass
+# --keep-data to preserve it.
 set -euo pipefail
-cd "$(dirname "$0")"
+
+REPO="tranhuuhuy297/agentpet-linux"
+ASSET_MATCH="x86_64-unknown-linux-gnu.tar.gz"
+RAW="https://raw.githubusercontent.com/$REPO/main"
+# Directory the script lives in (".") when piped via curl | bash.
+SRC_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo .)"
 
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
@@ -43,11 +53,33 @@ stop_running_app() {
   echo "$stopped"
 }
 
-# Ensures the GTK4/X11/ALSA build dependencies are present so a single
-# `./install.sh` works from a clean machine. On apt systems it installs any that
-# are missing (needs sudo); elsewhere it lists them and lets the build surface
-# the error. Skipped entirely when GTK4 is already discoverable.
-ensure_dependencies() {
+# Prebuilt binary needs the GTK4 runtime (not bundled). Install it only when
+# missing, and only on apt systems.
+ensure_runtime() {
+  # ldconfig usually lives in /usr/sbin, which isn't on a normal user's PATH.
+  local ldc; ldc="$(command -v ldconfig || true)"
+  if [ -z "$ldc" ]; then
+    for d in /usr/sbin /sbin; do [ -x "$d/ldconfig" ] && ldc="$d/ldconfig" && break; done
+  fi
+  if [ -n "$ldc" ] && "$ldc" -p 2>/dev/null | grep -q 'libgtk-4\.so'; then
+    return 0
+  fi
+  # Fallback before assuming it's missing: look for the shared object directly.
+  if ls /usr/lib/*/libgtk-4.so* /usr/lib/libgtk-4.so* /lib/*/libgtk-4.so* >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v apt-get >/dev/null; then
+    echo "==> Installing GTK4 runtime (sudo)…"
+    sudo apt-get update && sudo apt-get install -y libgtk-4-1 \
+      || echo "WARNING: couldn't install the GTK4 runtime; install libgtk-4-1 manually."
+  else
+    echo "WARNING: GTK4 runtime (libgtk-4) not found — install it so AgentPet can run."
+  fi
+}
+
+# Source build needs the GTK4/X11/ALSA dev libs. Install any missing on apt
+# systems; elsewhere list them and let the build surface the error.
+ensure_build_deps() {
   if command -v pkg-config >/dev/null && pkg-config --exists gtk4 2>/dev/null; then
     return 0
   fi
@@ -61,24 +93,33 @@ ensure_dependencies() {
   fi
 }
 
-do_install() {
-  ensure_dependencies
+# Install the desktop entry + icon from the local repo when present, else fetch
+# them from the repo (so curl | bash with no checkout still gets them).
+install_assets() {
+  if [ -f "$SRC_DIR/assets/agentpet.desktop" ]; then
+    install -Dm644 "$SRC_DIR/assets/agentpet.desktop" "$DESKTOP"
+    install -Dm644 "$SRC_DIR/assets/agentpet.png" "$ICON"
+  else
+    local tmp; tmp="$(mktemp -d)"
+    curl -fsSL "$RAW/assets/agentpet.desktop" -o "$tmp/d" 2>/dev/null && install -Dm644 "$tmp/d" "$DESKTOP" || true
+    curl -fsSL "$RAW/assets/agentpet.png" -o "$tmp/i" 2>/dev/null && install -Dm644 "$tmp/i" "$ICON" || true
+    rm -rf "$tmp"
+  fi
+}
 
-  echo "==> Building release binary…"
-  cargo build --release -p agentpet
-
+# Place a freshly produced binary ($1) plus assets, restarting the app if it
+# was running. Shared by the binary-download and source-build paths.
+finalize_install() {
+  local src="$1" was_running
   echo "==> Stopping any running AgentPet…"
-  local was_running
   was_running="$(stop_running_app)"
 
   echo "==> Installing to $PREFIX"
-  install -Dm755 target/release/agentpet "$BIN"
-  install -Dm644 assets/agentpet.desktop "$DESKTOP"
-  install -Dm644 assets/agentpet.png "$ICON"
+  install -Dm755 "$src" "$BIN"
+  install_assets
   rm -f "$LEGACY_ICON"
   refresh_caches
 
-  # Relaunch the updated app if it had been running and we have a display.
   if [ -n "$was_running" ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
     echo "==> Relaunching AgentPet…"
     nohup "$BIN" >/dev/null 2>&1 &
@@ -94,11 +135,45 @@ do_install() {
   esac
   echo "Launch from your app menu (AgentPet), or run: agentpet"
   echo "Tray icon needs the GNOME 'AppIndicator and KStatusNotifierItem Support' extension."
-  echo "Uninstall later with: ./uninstall.sh"
+  echo "Update later with: agentpet update.  Uninstall with: ./uninstall.sh"
+}
+
+# Default path: download the prebuilt binary from the latest release.
+do_install_binary() {
+  command -v curl >/dev/null || { echo "curl is required for the prebuilt install." >&2; exit 1; }
+  ensure_runtime
+
+  echo "==> Finding the latest AgentPet release…"
+  local url tmp
+  url="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+         | grep -o "https://[^\"]*$ASSET_MATCH" | head -1 || true)"
+  if [ -z "$url" ]; then
+    echo "ERROR: no prebuilt $ASSET_MATCH on the latest release." >&2
+    echo "       Build from source instead: ./install.sh --source" >&2
+    exit 1
+  fi
+
+  echo "==> Downloading $url"
+  tmp="$(mktemp -d)"
+  curl -fsSL "$url" -o "$tmp/agentpet.tar.gz"
+  tar -xzf "$tmp/agentpet.tar.gz" -C "$tmp"
+  finalize_install "$tmp/agentpet"
+  rm -rf "$tmp"
+}
+
+# Opt-in path: build from the cloned repo.
+do_install_source() {
+  cd "$SRC_DIR"
+  [ -f Cargo.toml ] || { echo "ERROR: --source must run inside the cloned repo." >&2; exit 1; }
+  ensure_build_deps
+  echo "==> Building release binary…"
+  cargo build --release -p agentpet
+  finalize_install target/release/agentpet
 }
 
 do_uninstall() {
   local keep_data="${1:-}"
+  cd "$SRC_DIR"
 
   echo "==> Stopping any running AgentPet…"
   stop_running_app >/dev/null
@@ -112,7 +187,7 @@ do_uninstall() {
   elif [ -x target/release/agentpet ]; then
     target/release/agentpet uninstall || true
   else
-    echo "    (agentpet binary not found — skipping hook cleanup; build it to clean hooks)"
+    echo "    (agentpet binary not found — skipping hook cleanup)"
   fi
 
   echo "==> Removing installed files…"
@@ -132,6 +207,7 @@ do_uninstall() {
 
 case "${1:-install}" in
   uninstall|remove) do_uninstall "${2:-}" ;;
-  install|"")       do_install ;;
-  *) echo "usage: $0 [install | uninstall [--keep-data]]" >&2; exit 2 ;;
+  --source|source)  do_install_source ;;
+  install|"")       do_install_binary ;;
+  *) echo "usage: $0 [install | --source | uninstall [--keep-data]]" >&2; exit 2 ;;
 esac
