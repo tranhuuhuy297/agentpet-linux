@@ -2,11 +2,13 @@
 # Install or uninstall AgentPet for the current user under ~/.local. No root
 # (sudo is used only to pull the GTK4 runtime/dev libs when they are missing).
 #
-#   ./install.sh              download the prebuilt release binary + install
-#   ./install.sh --source     build from source instead (needs the cloned repo)
+#   ./install.sh              auto: build from source when run inside the cloned
+#                             repo (cargo present), else download the release
+#   ./install.sh --source     force a source build (needs the cloned repo)
+#   ./install.sh --binary     force the prebuilt release download
 #   ./install.sh uninstall    remove hooks/autostart + installed files
 #
-# Works piped straight from the web (no clone needed):
+# Works piped straight from the web (no clone needed) — auto picks the binary:
 #   curl -fsSL https://raw.githubusercontent.com/tranhuuhuy297/agentpet-linux/main/install.sh | bash
 #
 # Uninstall also wipes ~/.agentpet (socket, queue, downloaded pets); pass
@@ -164,11 +166,30 @@ do_install_binary() {
 # Opt-in path: build from the cloned repo.
 do_install_source() {
   cd "$SRC_DIR"
-  [ -f Cargo.toml ] || { echo "ERROR: --source must run inside the cloned repo." >&2; exit 1; }
+  [ -f crates/agentpet/Cargo.toml ] || { echo "ERROR: --source must run inside the cloned repo." >&2; exit 1; }
+  command -v cargo >/dev/null || { echo "ERROR: cargo (Rust) not found — install Rust or use --binary." >&2; exit 1; }
   ensure_build_deps
   echo "==> Building release binary…"
   cargo build --release -p agentpet
   finalize_install target/release/agentpet
+}
+
+# True when sitting in the AgentPet source tree — checked via a repo-specific
+# path, not just any stray Cargo.toml (curl | bash leaves SRC_DIR as ".").
+in_source_tree() {
+  [ -f "$SRC_DIR/crates/agentpet/Cargo.toml" ]
+}
+
+# Default path: build from source when in the checkout (so local changes ship),
+# otherwise download the prebuilt release.
+do_install_auto() {
+  if in_source_tree && command -v cargo >/dev/null; then
+    echo "==> Local source checkout detected — building from source."
+    echo "    (use ./install.sh --binary for the prebuilt release instead)"
+    do_install_source
+  else
+    do_install_binary
+  fi
 }
 
 do_uninstall() {
@@ -208,6 +229,7 @@ do_uninstall() {
 case "${1:-install}" in
   uninstall|remove) do_uninstall "${2:-}" ;;
   --source|source)  do_install_source ;;
-  install|"")       do_install_binary ;;
-  *) echo "usage: $0 [install | --source | uninstall [--keep-data]]" >&2; exit 2 ;;
+  --binary|binary)  do_install_binary ;;
+  install|"")       do_install_auto ;;
+  *) echo "usage: $0 [install | --source | --binary | uninstall [--keep-data]]" >&2; exit 2 ;;
 esac

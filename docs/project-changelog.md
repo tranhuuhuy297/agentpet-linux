@@ -2,6 +2,28 @@
 
 All notable changes to AgentPet for Linux.
 
+## 0.3.0 — 2026-06-08
+
+### Per-agent pets
+- **One pet per agent kind.** The single aggregate pet is replaced by a floating
+  pet per active agent: run Claude Code and Codex at once and you get two pets,
+  each reflecting its own state (e.g. Claude "working" while Codex "waiting") —
+  the old single pet collapsed both into one mood. `MoodResolver::aggregate_by_kind`
+  groups sessions by `AgentKind` and reduces each group on its own.
+- **Visible only while live.** A pet appears when its agent has a working/waiting/
+  finishing session and disappears once that agent goes idle or ends, so an idle
+  desktop shows no pets. Pets sit in stable per-kind slots to avoid overlap.
+- **Per-agent pet packs.** Each agent can use a different pet. The Settings → Pet
+  tab gains an agent selector; choosing a pet assigns it to that agent
+  (`config.agent_pet_ids`), falling back to the global `selected_pet_id` default.
+  Installing a pet for one agent no longer changes another agent's pet.
+
+### Install / packaging
+- **`install.sh` auto-detects source vs. binary.** Run inside the cloned repo
+  (with `cargo` present) it now builds from source automatically — so a plain
+  `./install.sh` ships local changes; `curl … | bash` still grabs the prebuilt
+  release. Force either mode with `--source` / `--binary`.
+
 ## 0.2.0 — 2026-06-08
 
 ### Agent integration

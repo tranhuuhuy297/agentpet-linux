@@ -2,7 +2,7 @@
 //! JSON file (`~/.config/agentpet/config.json`). Keys mirror the `agentpet.*`
 //! defaults used across the Swift app; this grows as UI phases land.
 
-use crate::state::PetMood;
+use crate::state::{AgentKind, PetMood};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,8 +22,12 @@ pub struct Config {
     pub show_count: bool,
     /// Show the chat bubble below the tray icon.
     pub show_chat_menu_bar: bool,
-    /// Currently selected pet pack id (`pet.json` `id`).
+    /// Default pet pack id (`pet.json` `id`), used for any agent without its own
+    /// pick and as the first-run/bootstrap selection.
     pub selected_pet_id: Option<String>,
+    /// Per-agent pet pack id, keyed by `AgentKind::raw()`. Lets each agent (e.g.
+    /// Claude vs Codex) show a different pet; falls back to `selected_pet_id`.
+    pub agent_pet_ids: HashMap<String, String>,
     /// Show the pet's chat bubble.
     pub show_chat: bool,
     /// Pet render size in points.
@@ -51,6 +55,7 @@ impl Default for Config {
             show_count: true,
             show_chat_menu_bar: false,
             selected_pet_id: None,
+            agent_pet_ids: HashMap::new(),
             show_chat: true,
             pet_size: 110.0,
             has_onboarded: false,
@@ -92,6 +97,20 @@ impl Config {
         std::fs::write(path, data)
     }
 
+    /// Pet pack id to show for `kind`: its own pick if set, otherwise the global
+    /// `selected_pet_id` default.
+    pub fn pet_id_for(&self, kind: AgentKind) -> Option<&str> {
+        self.agent_pet_ids
+            .get(kind.raw())
+            .or(self.selected_pet_id.as_ref())
+            .map(String::as_str)
+    }
+
+    /// Assigns a pet pack to one agent and persists it.
+    pub fn set_pet_for(&mut self, kind: AgentKind, pack_id: impl Into<String>) {
+        self.agent_pet_ids.insert(kind.raw().to_string(), pack_id.into());
+    }
+
     /// Clip index for a pet+mood, falling back to the default spread when the
     /// pack has no stored binding.
     pub fn clip_index(&self, pack_id: &str, clip_count: usize, mood: PetMood) -> usize {
@@ -125,6 +144,29 @@ mod tests {
     fn missing_file_yields_defaults() {
         let cfg = Config::load_from(std::path::Path::new("/nonexistent/agentpet/config.json"));
         assert_eq!(cfg, Config::default());
+    }
+
+    #[test]
+    fn pet_id_for_falls_back_to_default_then_uses_agent_pick() {
+        let mut cfg = Config::default();
+        cfg.selected_pet_id = Some("boba".into());
+        // No per-agent pick yet: every agent uses the default.
+        assert_eq!(cfg.pet_id_for(AgentKind::Claude), Some("boba"));
+        assert_eq!(cfg.pet_id_for(AgentKind::Codex), Some("boba"));
+        // Assigning Codex its own pet leaves Claude on the default.
+        cfg.set_pet_for(AgentKind::Codex, "cube");
+        assert_eq!(cfg.pet_id_for(AgentKind::Codex), Some("cube"));
+        assert_eq!(cfg.pet_id_for(AgentKind::Claude), Some("boba"));
+    }
+
+    #[test]
+    fn agent_pet_ids_roundtrip_through_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = Config::default();
+        cfg.set_pet_for(AgentKind::Claude, "boba");
+        cfg.save_to(&path).unwrap();
+        assert_eq!(Config::load_from(&path).pet_id_for(AgentKind::Claude), Some("boba"));
     }
 
     #[test]

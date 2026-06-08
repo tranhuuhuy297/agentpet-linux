@@ -31,7 +31,8 @@ agent lifecycle event
           ├─ SessionStore: create/update, keyed by session_id
           ├─ prune timer (10s): demote/remove stale sessions
           └─ on change → snapshot to GTK thread
-                ├─ MoodResolver → one pet mood
+                ├─ MoodResolver → one mood per active agent kind
+                ├─ pets: one floating pet per active agent (Claude, Codex, …)
                 ├─ tray (ksni): otter icon + count
                 ├─ monitor window: per-session live timers
                 └─ notifications + sound
@@ -66,11 +67,20 @@ timestamps) and deletes all of them. Files older than `QUEUE_MAX_AGE_SECS`
 on apply anyway — which bounds the directory. `write_to_queue` also prunes
 expired files as it writes.
 
-### Mood aggregation — one pet
-`MoodResolver::aggregate` reduces **all** sessions across **all** agents to a
-single pet mood by priority: `working > waiting > done > idle`. There is exactly
-one pet; per-agent/per-session detail lives in the monitor window and the tray
-count.
+### Mood aggregation — one pet per agent
+`MoodResolver::aggregate` reduces a set of sessions to a single mood by priority:
+`working > waiting > done > idle`. `MoodResolver::aggregate_by_kind` groups
+sessions by `AgentKind` and runs that reduction per group, dropping any kind
+whose mood is `idle` — so the result is one mood per agent that currently has a
+live, attention-worthy session.
+
+The GTK layer (`ui::Ui::sync_pets`) keeps one floating pet window per active
+agent kind: a pet appears when its agent starts working/waiting/finishing and is
+closed when that agent goes idle or ends. Each agent renders its own pet pack —
+`Config::pet_id_for(kind)` returns the agent's pick (`agent_pet_ids`) or the
+global `selected_pet_id` default. Pets are placed in stable per-kind slots so
+they don't overlap. Per-session detail still lives in the monitor window and the
+tray count (both remain aggregate across all agents).
 
 ## Hook installation
 Enabling an agent in Settings writes a command into that agent's config

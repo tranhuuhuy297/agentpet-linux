@@ -4,7 +4,8 @@ A native **Rust + GTK4** app for **Ubuntu 22.04+**, inspired by
 [AgentPet](https://github.com/ntd4996/agentpet) (macOS). Watch your AI coding agents (Claude Code and
 Codex) running in parallel and see — at a glance — which one is **working**,
 which is **done**, and which is **waiting for your input**, via a tray monitor
-and an ambient desktop pet.
+and a desktop pet per agent (run Claude Code and Codex together and you get two
+pets, each reflecting its own state).
 
 > Status: **working.** Core logic, CLI/daemon, the GTK pet + monitor + settings,
 > the Petdex gallery, notifications, and packaging are all implemented and
@@ -23,7 +24,7 @@ pet's mood.
 agent hook → `agentpet hook …` → Unix socket → daemon (SessionStore)
                                                   ├── tray (ksni): paw + count
                                                   ├── monitor window: live timers
-                                                  ├── desktop pet: aggregate mood
+                                                  ├── desktop pets: one per active agent
                                                   └── notifications + sound
 ```
 
@@ -50,12 +51,16 @@ GTK4 runtime is missing):
 curl -fsSL https://raw.githubusercontent.com/tranhuuhuy297/agentpet-linux/main/install.sh | bash
 ```
 
-Prefer to build from source? Clone and run `./install.sh --source` — it installs
-any missing build dependencies, compiles the release, and installs to `~/.local`:
+Prefer to build from source? Clone and run `./install.sh` — when run inside the
+cloned repo it **auto-detects the checkout and builds from source** (installing
+any missing build deps, compiling the release into `~/.local`):
 
 ```bash
-git clone https://github.com/tranhuuhuy297/agentpet-linux && cd agentpet-linux && ./install.sh --source
+git clone https://github.com/tranhuuhuy297/agentpet-linux && cd agentpet-linux && ./install.sh
 ```
+
+Force either mode with `./install.sh --source` (always build) or
+`./install.sh --binary` (always download the prebuilt release).
 
 Launch **AgentPet** from your app menu, or run `agentpet`. On first launch it
 opens Settings — flip on the agents you use (writes their hook configs) and pick
@@ -82,8 +87,8 @@ Pass `--keep-data` to preserve `~/.agentpet` (queue + downloaded pets).
 ## Usage
 
 - **Claude Code, Codex:** toggle them on in Settings → General (installs the
-  hook). The pet then reflects each session's real state, including "waiting for
-  input".
+  hook). Each agent gets its own pet that reflects its real state, including
+  "waiting for input"; pick a per-agent pet on the Settings → Pet tab.
 - **Any other CLI agent:** `agentpet run -- <command>` (e.g. `agentpet run -- aider`).
 
 ## Workspace layout

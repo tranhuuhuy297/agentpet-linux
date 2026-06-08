@@ -1,5 +1,9 @@
-//! Aggregates the on-screen surfaces (pet + monitor + tray) and applies each
+//! Aggregates the on-screen surfaces (pets + monitor + tray) and applies each
 //! `UiUpdate` to them. Lives entirely on the GTK main thread.
+//!
+//! There is one pet window per *active* agent kind (Claude, Codex, …): a pet
+//! appears when its agent has a live, attention-worthy session and is closed
+//! when that agent goes idle. Each agent renders its own configured pet pack.
 
 pub mod monitor;
 pub mod settings;
@@ -9,16 +13,22 @@ use crate::pet::PetWindow;
 use crate::snapshot::{GalleryRequest, GalleryResult, UiCommand, UiUpdate};
 use agentpet_core::config::Config;
 use agentpet_core::sprite::{load_pack, PetPack};
+use agentpet_core::state::AgentKind;
 use gtk4::gio;
 use gtk4::prelude::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 pub struct Ui {
-    pet: PetWindow,
+    app: gtk4::Application,
+    cmd: async_channel::Sender<UiCommand>,
+    /// One pet window per currently-active agent kind.
+    pets: RefCell<HashMap<AgentKind, PetWindow>>,
     monitor: monitor::MonitorWindow,
     settings: settings::SettingsWindow,
     tray: Option<ksni::blocking::Handle<tray::AgentTray>>,
-    // Keeps the GtkApplication alive even when no window is visible (the pet is
-    // always present, but this guards against it being closed).
+    // Keeps the GtkApplication alive even when no pet window is visible (pets
+    // come and go with agent activity, so without this the app could exit).
     _hold: gio::ApplicationHoldGuard,
 }
 
@@ -29,11 +39,18 @@ impl Ui {
         gallery_tx: async_channel::Sender<GalleryRequest>,
     ) -> Self {
         let hold = app.hold();
-        let pet = PetWindow::new(app, cmd.clone());
         let monitor = monitor::MonitorWindow::new(app, cmd.clone());
-        let settings = settings::SettingsWindow::new(app, gallery_tx);
-        let tray = tray::spawn(cmd);
-        Ui { pet, monitor, settings, tray, _hold: hold }
+        let settings = settings::SettingsWindow::new(app, gallery_tx, cmd.clone());
+        let tray = tray::spawn(cmd.clone());
+        Ui {
+            app: app.clone(),
+            cmd,
+            pets: RefCell::new(HashMap::new()),
+            monitor,
+            settings,
+            tray,
+            _hold: hold,
+        }
     }
 
     pub fn show_settings(&self) {
@@ -45,7 +62,7 @@ impl Ui {
     }
 
     pub fn apply(&self, update: &UiUpdate) {
-        self.pet.set_mood(update.mood);
+        self.sync_pets(&update.moods);
         self.monitor.set_sessions(&update.sessions);
         let (running, waiting) = (update.running, update.waiting);
         if let Some(tray) = &self.tray {
@@ -56,26 +73,70 @@ impl Ui {
         }
     }
 
+    /// Reconciles the live pet windows with the agents that should be showing
+    /// one: update existing pets' moods, spawn pets for newly-active agents,
+    /// and close pets whose agent is no longer active.
+    fn sync_pets(&self, moods: &[(AgentKind, agentpet_core::state::PetMood)]) {
+        let mut pets = self.pets.borrow_mut();
+        let active: Vec<AgentKind> = moods.iter().map(|(k, _)| *k).collect();
+
+        // Close pets for agents that went idle/ended.
+        pets.retain(|kind, pet| {
+            let keep = active.contains(kind);
+            if !keep {
+                pet.close();
+            }
+            keep
+        });
+
+        // Create or update a pet for each active agent.
+        for (kind, mood) in moods {
+            if let Some(pet) = pets.get(kind) {
+                pet.set_mood(*mood);
+            } else {
+                let pet = PetWindow::new(&self.app, self.cmd.clone(), kind_slot(*kind));
+                pet.set_pack(load_pack_for_kind(*kind).as_ref());
+                pet.set_mood(*mood);
+                pets.insert(*kind, pet);
+            }
+        }
+    }
+
     pub fn show_monitor(&self) {
         self.monitor.show();
     }
 
-    /// Re-scans installed pet packs and loads the selected one into the pet
-    /// (falling back to the first available, or the blob if none).
+    /// Reloads each live pet's configured pack (after a download or a per-agent
+    /// pet selection change). Pets that aren't currently shown pick up the new
+    /// pack the next time their agent becomes active.
     pub fn reload_pet(&self) {
-        self.pet.set_pack(load_selected_pack().as_ref());
+        for (kind, pet) in self.pets.borrow().iter() {
+            pet.set_pack(load_pack_for_kind(*kind).as_ref());
+        }
     }
 }
 
-/// Loads the pack whose manifest id matches the config selection, else the first
-/// installed pack that slices successfully.
-fn load_selected_pack() -> Option<PetPack> {
+/// Stable horizontal placement slot for an agent's pet, so each agent keeps a
+/// consistent spot. Mirrors `AgentKind`'s declaration order.
+fn kind_slot(kind: AgentKind) -> i32 {
+    match kind {
+        AgentKind::Claude => 0,
+        AgentKind::Codex => 1,
+        AgentKind::Cli => 2,
+        AgentKind::Unknown => 3,
+    }
+}
+
+/// Loads the pack configured for `kind` (its own pick, else the global default),
+/// falling back to the first installed pack that slices successfully.
+fn load_pack_for_kind(kind: AgentKind) -> Option<PetPack> {
     let cfg = Config::load();
+    let want = cfg.pet_id_for(kind);
     let mut first = None;
     if let Ok(entries) = std::fs::read_dir(crate::petdex::pets_dir()) {
         for entry in entries.flatten() {
             if let Some(pack) = load_pack(&entry.path()) {
-                if cfg.selected_pet_id.as_deref() == Some(pack.manifest.id.as_str()) {
+                if want == Some(pack.manifest.id.as_str()) {
                     return Some(pack);
                 }
                 if first.is_none() {

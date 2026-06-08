@@ -26,18 +26,26 @@ use x11rb::protocol::xproto::{
 use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
 const SIZE: i32 = 140;
+/// Horizontal gap between adjacent agents' pets at first placement.
+const SLOT_GAP: i32 = 24;
+/// Top-left anchor for the first pet; later slots step to the right.
+const ANCHOR_X: i32 = 80;
+const ANCHOR_Y: i32 = 120;
 
 /// Sliced pet-pack frames, ready to paint (one inner Vec per animation clip).
 type Clips = Rc<RefCell<Vec<Vec<cairo::ImageSurface>>>>;
 
 pub struct PetWindow {
+    window: ApplicationWindow,
     mood: Rc<Cell<PetMood>>,
     clips: Clips,
     bindings: Rc<RefCell<PetBindings>>,
 }
 
 impl PetWindow {
-    pub fn new(app: &Application, cmd: async_channel::Sender<UiCommand>) -> Self {
+    /// Creates a pet window. `slot` (0, 1, 2, …) staggers its initial position so
+    /// each agent's pet starts in a distinct, non-overlapping spot.
+    pub fn new(app: &Application, cmd: async_channel::Sender<UiCommand>, slot: i32) -> Self {
         let window = ApplicationWindow::builder()
             .application(app)
             .title("AgentPet")
@@ -72,9 +80,16 @@ impl PetWindow {
             // phase at ~12.5 Hz and redrawing only when the visible output
             // (frame index or pixel-snapped bob) actually changed keeps the
             // always-on pet near-zero CPU while idle.
-            let (mood, phase, area) = (mood.clone(), phase.clone(), area.clone());
+            // Hold the area weakly so the timer self-cancels once this pet's
+            // window is closed (a pet per agent comes and goes); a strong ref
+            // would keep ticking and redrawing a destroyed widget forever.
+            let (mood, phase) = (mood.clone(), phase.clone());
+            let area_weak = area.downgrade();
             let last_drawn = Cell::new((PetMood::Idle as u8, 0_usize, i32::MIN));
             glib::timeout_add_local(std::time::Duration::from_millis(TICK_MS), move || {
+                let Some(area) = area_weak.upgrade() else {
+                    return glib::ControlFlow::Break;
+                };
                 let m = mood.get();
                 phase.set(phase.get() + phase_rate(m) * (TICK_MS as f64 / 1000.0));
                 let p = phase.get();
@@ -95,20 +110,28 @@ impl PetWindow {
         attach_drag(&window);
         attach_right_click(&window, cmd);
 
-        window.connect_map(|win| {
+        window.connect_map(move |win| {
             if let Some(xid) = window_xid(win) {
                 if let Err(e) = apply_pet_traits(xid) {
                     eprintln!("agentpet: pet window X11 setup failed: {e}");
                 }
+                // Stagger each agent's pet so multiple pets don't stack.
+                let x = ANCHOR_X + slot * (SIZE + SLOT_GAP);
+                let _ = move_window(xid, x, ANCHOR_Y);
             }
         });
 
         window.present();
-        PetWindow { mood, clips, bindings }
+        PetWindow { window, mood, clips, bindings }
     }
 
     pub fn set_mood(&self, mood: PetMood) {
         self.mood.set(mood);
+    }
+
+    /// Closes and destroys the window (its agent went idle / ended).
+    pub fn close(&self) {
+        self.window.close();
     }
 
     /// Loads a pet pack's frames (or clears them, falling back to the blob).
@@ -131,6 +154,14 @@ impl PetWindow {
 }
 
 fn install_transparent_css() {
+    // One display-wide provider suffices; pets are created and destroyed
+    // repeatedly, so guard against stacking a fresh provider on every pet.
+    thread_local! {
+        static INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if INSTALLED.with(|i| i.replace(true)) {
+        return;
+    }
     let provider = CssProvider::new();
     provider.load_from_data("window.agentpet-pet { background-color: transparent; }");
     if let Some(display) = gdk::Display::default() {

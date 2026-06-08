@@ -176,9 +176,14 @@ pub async fn gallery_worker(
             GalleryRequest::Download(pet) => {
                 let result = match download(&pet).await {
                     Ok(id) => {
+                        // Seed the global default only if unset; the GTK side
+                        // assigns the pet to the requesting agent, so don't
+                        // clobber the default other agents fall back to.
                         let mut cfg = agentpet_core::config::Config::load();
-                        cfg.selected_pet_id = Some(id.clone());
-                        let _ = cfg.save();
+                        if cfg.selected_pet_id.is_none() {
+                            cfg.selected_pet_id = Some(id.clone());
+                            let _ = cfg.save();
+                        }
                         let _ = reload.send(()).await;
                         GalleryResult::Downloaded(id)
                     }

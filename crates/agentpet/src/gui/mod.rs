@@ -98,6 +98,7 @@ pub fn run_gui() -> ExitCode {
                         UiCommand::ShowMonitor => ui.show_monitor(),
                         UiCommand::OpenSettings => ui.show_settings(),
                         UiCommand::Quit => app.quit(),
+                        UiCommand::ReloadPets => ui.reload_pet(),
                     }
                 }
             });

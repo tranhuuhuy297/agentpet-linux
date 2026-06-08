@@ -50,8 +50,9 @@ impl AgentState {
     }
 }
 
-/// Which agent a session belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Which agent a session belongs to. The declaration order is also the pet
+/// placement order (derived `Ord`), so each agent's pet keeps a stable slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentKind {
     Claude,

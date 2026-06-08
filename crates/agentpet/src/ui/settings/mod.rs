@@ -7,7 +7,7 @@ mod general;
 mod pet_page;
 mod style;
 
-use crate::snapshot::{GalleryRequest, GalleryResult};
+use crate::snapshot::{GalleryRequest, GalleryResult, UiCommand};
 use async_channel::Sender;
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, HeaderBar, Label, Stack, StackSwitcher};
@@ -21,7 +21,11 @@ pub struct SettingsWindow {
 }
 
 impl SettingsWindow {
-    pub fn new(app: &Application, gallery_tx: Sender<GalleryRequest>) -> Self {
+    pub fn new(
+        app: &Application,
+        gallery_tx: Sender<GalleryRequest>,
+        cmd: Sender<UiCommand>,
+    ) -> Self {
         style::ensure_loaded();
 
         let window = ApplicationWindow::builder()
@@ -32,7 +36,7 @@ impl SettingsWindow {
             .build();
         window.set_hide_on_close(true);
 
-        let pets = pet_page::PetPage::new(gallery_tx);
+        let pets = pet_page::PetPage::new(gallery_tx, cmd);
         let stack = Stack::new();
         stack.add_titled(&general::build(), Some("general"), "General");
         stack.add_titled(pets.widget(), Some("pet"), "Pet");
