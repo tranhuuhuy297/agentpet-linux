@@ -68,15 +68,25 @@ impl PetWindow {
             });
         }
         {
-            let (mood, phase) = (mood.clone(), phase.clone());
-            area.add_tick_callback(move |area, _| {
-                let speed = match mood.get() {
-                    PetMood::Working | PetMood::Celebrate => 0.08,
-                    PetMood::Waiting => 0.05,
-                    _ => 0.03,
-                };
-                phase.set(phase.get() + speed);
-                area.queue_draw();
+            // A coarse fixed timer instead of a per-vsync tick: advancing the
+            // phase at ~12.5 Hz and redrawing only when the visible output
+            // (frame index or pixel-snapped bob) actually changed keeps the
+            // always-on pet near-zero CPU while idle.
+            let (mood, phase, area) = (mood.clone(), phase.clone(), area.clone());
+            let last_drawn = Cell::new((PetMood::Idle as u8, 0_usize, i32::MIN));
+            glib::timeout_add_local(std::time::Duration::from_millis(TICK_MS), move || {
+                let m = mood.get();
+                phase.set(phase.get() + phase_rate(m) * (TICK_MS as f64 / 1000.0));
+                let p = phase.get();
+                let key = (
+                    m as u8,
+                    (p * frame_rate(m)) as usize,
+                    (p.sin() * bob_amplitude(m)).round() as i32,
+                );
+                if last_drawn.get() != key {
+                    last_drawn.set(key);
+                    area.queue_draw();
+                }
                 glib::ControlFlow::Continue
             });
         }
@@ -141,7 +151,8 @@ fn draw(
     clips: &[Vec<cairo::ImageSurface>],
     bindings: &PetBindings,
 ) {
-    let bob = phase.sin() * bob_amplitude(mood);
+    // Pixel-snapped so it matches the redraw-skipping key in the tick timer.
+    let bob = (phase.sin() * bob_amplitude(mood)).round();
     if clips.is_empty() {
         draw_blob(cr, w, h, mood, bob);
         return;
@@ -168,6 +179,19 @@ fn draw(
     let _ = cr.set_source_surface(surface, 0.0, 0.0);
     let _ = cr.paint();
     let _ = cr.restore();
+}
+
+/// Animation timer period. 80 ms (12.5 Hz) is above every clip's effective
+/// frame rate, so motion stays smooth while redraws stay rare.
+const TICK_MS: u64 = 80;
+
+/// Phase advance in rad/s per mood (matches the old per-vsync speeds at 60 Hz).
+fn phase_rate(mood: PetMood) -> f64 {
+    match mood {
+        PetMood::Working | PetMood::Celebrate => 4.8,
+        PetMood::Waiting => 3.0,
+        _ => 1.8,
+    }
 }
 
 fn bob_amplitude(mood: PetMood) -> f64 {

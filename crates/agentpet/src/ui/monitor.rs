@@ -73,11 +73,15 @@ impl MonitorWindow {
 
         let sessions = Rc::new(RefCell::new(Vec::<AgentSession>::new()));
 
-        // Tick the elapsed timers once a second.
+        // Tick the elapsed timers once a second — but only while the window is
+        // actually on screen (it hides on close and would otherwise re-render
+        // invisibly forever).
         {
-            let (list, sessions) = (list.clone(), sessions.clone());
+            let (window, list, sessions) = (window.clone(), list.clone(), sessions.clone());
             gtk4::glib::timeout_add_seconds_local(1, move || {
-                render(&list, &sessions.borrow());
+                if window.is_visible() {
+                    render(&list, &sessions.borrow());
+                }
                 gtk4::glib::ControlFlow::Continue
             });
         }
@@ -87,10 +91,14 @@ impl MonitorWindow {
 
     pub fn set_sessions(&self, sessions: &[AgentSession]) {
         *self.sessions.borrow_mut() = sessions.to_vec();
-        render(&self.list, &self.sessions.borrow());
+        if self.window.is_visible() {
+            render(&self.list, &self.sessions.borrow());
+        }
     }
 
     pub fn show(&self) {
+        // Render before presenting — the list may be stale from a hidden spell.
+        render(&self.list, &self.sessions.borrow());
         self.window.present();
     }
 }
