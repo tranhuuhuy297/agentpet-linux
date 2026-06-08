@@ -87,10 +87,11 @@ h1 .accent { background:linear-gradient(120deg, var(--cyan), #9ee0ff);
   -webkit-background-clip:text; background-clip:text; color:transparent; }
 .sub { font-size:18px; color:var(--muted); margin:22px 0 30px; max-width:30em; }
 .sub b { color:var(--text); font-weight:600; }
-.cmd { display:flex; align-items:center; gap:12px; background:var(--surface); border:1px solid var(--border);
-  border-radius:12px; padding:13px 15px; max-width:430px; box-shadow:var(--shadow); }
-.cmd .prompt { color:var(--cyan); font-family:var(--mono); font-weight:600; }
-.cmd code { font-family:var(--mono); font-size:14px; color:var(--text); white-space:nowrap; overflow:hidden; flex:1; }
+.cmd { display:flex; align-items:center; gap:10px; background:var(--surface); border:1px solid var(--border);
+  border-radius:12px; padding:13px 14px; width:100%; box-shadow:var(--shadow); }
+.cmd .prompt { color:var(--cyan); font-family:var(--mono); font-weight:600; flex-shrink:0; }
+.cmd code { font-family:var(--mono); font-size:12px; color:var(--text); white-space:nowrap;
+  overflow-x:auto; min-width:0; flex:1; scrollbar-width:thin; }
 .copy { margin-left:auto; background:transparent; border:1px solid var(--border); color:var(--muted);
   border-radius:7px; padding:6px 10px; font-size:12px; cursor:pointer; font-family:var(--mono); transition:.15s; flex-shrink:0; }
 .copy:hover { color:var(--text); border-color:var(--cyan-deep); }
