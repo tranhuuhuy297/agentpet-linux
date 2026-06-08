@@ -11,6 +11,10 @@ on:
       - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
 
+# Run the bundled JS actions on Node 24 (Node 20 is being removed from runners).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
   pages: write
