@@ -25,9 +25,31 @@ refresh_caches() {
   command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f "$PREFIX/share/icons/hicolor" 2>/dev/null || true
 }
 
+# Stop a running AgentPet app/daemon so the new binary can take over (the running
+# one holds the Unix socket and the single-instance guard would reject the new
+# launch). Only the GUI/daemon instance is killed; short-lived `hook`/`run`/
+# `update` CLI invocations are left alone. Echoes "1" if something was stopped.
+stop_running_app() {
+  command -v pgrep >/dev/null || return 0
+  local stopped=""
+  local pid args
+  for pid in $(pgrep -x agentpet 2>/dev/null); do
+    args=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
+    case "$args" in
+      *" hook "*|*" run "*|*" uninstall"*|*" update"*) ;;  # leave CLI invocations
+      *) kill "$pid" 2>/dev/null && stopped="1" ;;
+    esac
+  done
+  echo "$stopped"
+}
+
 do_install() {
   echo "==> Building release binary…"
   cargo build --release -p agentpet
+
+  echo "==> Stopping any running AgentPet…"
+  local was_running
+  was_running="$(stop_running_app)"
 
   echo "==> Installing to $PREFIX"
   install -Dm755 target/release/agentpet "$BIN"
@@ -35,6 +57,13 @@ do_install() {
   install -Dm644 assets/agentpet.png "$ICON"
   rm -f "$LEGACY_ICON"
   refresh_caches
+
+  # Relaunch the updated app if it had been running and we have a display.
+  if [ -n "$was_running" ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    echo "==> Relaunching AgentPet…"
+    nohup "$BIN" >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
 
   echo
   echo "Installed:"
@@ -50,6 +79,9 @@ do_install() {
 
 do_uninstall() {
   local keep_data="${1:-}"
+
+  echo "==> Stopping any running AgentPet…"
+  stop_running_app >/dev/null
 
   # Remove the agent hooks + autostart the app wrote (inverse of the Settings
   # toggles). Prefer the installed binary; fall back to a freshly built one so
