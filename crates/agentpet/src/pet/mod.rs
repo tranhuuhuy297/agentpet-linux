@@ -69,6 +69,10 @@ impl PetWindow {
 
         let mood = Rc::new(Cell::new(PetMood::Idle));
         let phase = Rc::new(Cell::new(0.0_f64));
+        // While the user is dragging, the pet holds still: pausing the tick frees
+        // the main loop to service motion events and stops it competing with
+        // window-move redraws (which was part of the residual drag jitter).
+        let dragging = Rc::new(Cell::new(false));
         let clips: Clips = Rc::new(RefCell::new(Vec::new()));
         let bindings = Rc::new(RefCell::new(PetBindings::defaults(0)));
 
@@ -92,13 +96,16 @@ impl PetWindow {
             // Hold the area weakly so the timer self-cancels once this pet's
             // window is closed (a pet per agent comes and goes); a strong ref
             // would keep ticking and redrawing a destroyed widget forever.
-            let (mood, phase) = (mood.clone(), phase.clone());
+            let (mood, phase, dragging) = (mood.clone(), phase.clone(), dragging.clone());
             let area_weak = area.downgrade();
             let last_drawn = Cell::new((PetMood::Idle as u8, 0_usize, i32::MIN));
             glib::timeout_add_local(std::time::Duration::from_millis(TICK_MS), move || {
                 let Some(area) = area_weak.upgrade() else {
                     return glib::ControlFlow::Break;
                 };
+                if dragging.get() {
+                    return glib::ControlFlow::Continue;
+                }
                 let m = mood.get();
                 phase.set(phase.get() + phase_rate(m) * (TICK_MS as f64 / 1000.0));
                 let p = phase.get();
@@ -116,7 +123,7 @@ impl PetWindow {
         }
         window.set_child(Some(&area));
 
-        attach_drag(&window);
+        attach_drag(&window, dragging);
         attach_right_click(&window, cmd);
 
         window.connect_map(move |win| {
@@ -390,26 +397,73 @@ fn intern(conn: &impl Connection, name: &[u8]) -> Result<u32, Box<dyn std::error
     Ok(conn.intern_atom(false, name)?.reply()?.atom)
 }
 
-fn attach_drag(window: &ApplicationWindow) {
+/// State held for the duration of a single drag gesture: one X11 connection
+/// opened at drag start and reused for every motion event. Reconnecting per
+/// `drag_update` (which fires dozens of times per second) paid a full X11
+/// handshake each time — the original source of drag jitter.
+struct DragSession {
+    conn: x11rb::rust_connection::RustConnection,
+    xid: u32,
+    root: u32,
+    /// Pointer-minus-window-origin (root coords) captured at grab time. Each
+    /// event re-derives the window position from the live pointer so the grabbed
+    /// pixel stays under the cursor. This is self-correcting: moving the window
+    /// never feeds back into the gesture's (window-relative) coordinate frame,
+    /// which is what made accumulating raw gesture deltas drift and jitter.
+    grab_offset: (i32, i32),
+}
+
+impl DragSession {
+    fn start(window: &ApplicationWindow) -> Option<Self> {
+        let xid = window_xid(window)?;
+        let (conn, screen_num) = x11rb::connect(None).ok()?;
+        let root = conn.setup().roots[screen_num].root;
+        let origin = conn.translate_coordinates(xid, root, 0, 0).ok()?.reply().ok()?;
+        let ptr = conn.query_pointer(root).ok()?.reply().ok()?;
+        let grab_offset = (
+            ptr.root_x as i32 - origin.dst_x as i32,
+            ptr.root_y as i32 - origin.dst_y as i32,
+        );
+        Some(Self { conn, xid, root, grab_offset })
+    }
+
+    fn track_pointer(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let ptr = self.conn.query_pointer(self.root)?.reply()?;
+        let (gx, gy) = self.grab_offset;
+        self.conn.configure_window(
+            self.xid,
+            &ConfigureWindowAux::new()
+                .x(ptr.root_x as i32 - gx)
+                .y(ptr.root_y as i32 - gy),
+        )?;
+        self.conn.flush()?;
+        Ok(())
+    }
+}
+
+fn attach_drag(window: &ApplicationWindow, dragging: Rc<Cell<bool>>) {
     let drag = GestureDrag::new();
-    let origin = Rc::new(Cell::new((0_i32, 0_i32)));
+    let session: Rc<RefCell<Option<DragSession>>> = Rc::new(RefCell::new(None));
     {
-        let (window, origin) = (window.clone(), origin.clone());
+        let (window, session, dragging) = (window.clone(), session.clone(), dragging.clone());
         drag.connect_drag_begin(move |_, _, _| {
-            if let Some(xid) = window_xid(&window) {
-                if let Ok(pos) = window_root_origin(xid) {
-                    origin.set(pos);
-                }
+            *session.borrow_mut() = DragSession::start(&window);
+            dragging.set(true);
+        });
+    }
+    {
+        let session = session.clone();
+        drag.connect_drag_update(move |_, _, _| {
+            if let Some(s) = session.borrow().as_ref() {
+                let _ = s.track_pointer();
             }
         });
     }
     {
-        let (window, origin) = (window.clone(), origin.clone());
-        drag.connect_drag_update(move |_, dx, dy| {
-            if let Some(xid) = window_xid(&window) {
-                let (ox, oy) = origin.get();
-                let _ = move_window(xid, ox + dx as i32, oy + dy as i32);
-            }
+        let session = session.clone();
+        drag.connect_drag_end(move |_, _, _| {
+            session.borrow_mut().take();
+            dragging.set(false);
         });
     }
     window.add_controller(drag);
@@ -422,13 +476,6 @@ fn attach_right_click(window: &ApplicationWindow, cmd: async_channel::Sender<UiC
         let _ = cmd.try_send(UiCommand::ShowMonitor);
     });
     window.add_controller(click);
-}
-
-fn window_root_origin(window: u32) -> Result<(i32, i32), Box<dyn std::error::Error>> {
-    let (conn, screen_num) = x11rb::connect(None)?;
-    let root = conn.setup().roots[screen_num].root;
-    let t = conn.translate_coordinates(window, root, 0, 0)?.reply()?;
-    Ok((t.dst_x as i32, t.dst_y as i32))
 }
 
 fn move_window(window: u32, x: i32, y: i32) -> Result<(), Box<dyn std::error::Error>> {

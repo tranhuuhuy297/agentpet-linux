@@ -49,7 +49,7 @@ pub fn build() -> ScrolledWindow {
     ));
     links.append(&link_row(
         "Pet library",
-        "<a href='https://petdex.crafter.run/'>petdex.crafter.run ↗</a>",
+        "<a href='https://petdex.dev/'>petdex.dev ↗</a>",
     ));
     links.append(&link_row("License", "MIT"));
     links.append(&link_row("Check for updates", "<tt>agentpet update</tt>"));
