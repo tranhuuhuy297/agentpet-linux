@@ -39,10 +39,13 @@ impl AgentState {
     }
 
     /// Higher means more deserving of the user's attention (drives `sorted`).
+    /// `Waiting` outranks `Working`: a session blocked on the user needs action
+    /// now, so it sorts to the top of the Monitor — matching the pet, which also
+    /// surfaces waiting over working (`MoodResolver::aggregate`).
     pub fn attention_priority(self) -> i32 {
         match self {
-            Self::Working => 4,
-            Self::Waiting => 3,
+            Self::Waiting => 4,
+            Self::Working => 3,
             Self::Done => 2,
             Self::Registered => 1,
             Self::Idle => 0,
@@ -131,9 +134,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn attention_priority_orders_working_highest() {
-        assert!(AgentState::Working.attention_priority() > AgentState::Waiting.attention_priority());
-        assert!(AgentState::Waiting.attention_priority() > AgentState::Done.attention_priority());
+    fn attention_priority_orders_waiting_highest() {
+        assert!(AgentState::Waiting.attention_priority() > AgentState::Working.attention_priority());
+        assert!(AgentState::Working.attention_priority() > AgentState::Done.attention_priority());
         assert!(AgentState::Done.attention_priority() > AgentState::Registered.attention_priority());
         assert!(AgentState::Registered.attention_priority() > AgentState::Idle.attention_priority());
     }

@@ -10,12 +10,13 @@ pub mod settings;
 pub mod tray;
 pub mod window_icon;
 
-use crate::pet::PetWindow;
+use crate::pet::{PetWindow, WaitingRow};
 use crate::snapshot::{UiCommand, UiUpdate};
 use agentpet_core::catalog::AgentCatalog;
 use agentpet_core::config::Config;
+use agentpet_core::session::AgentSession;
 use agentpet_core::sprite::{load_pack, PetPack};
-use agentpet_core::state::AgentKind;
+use agentpet_core::state::{AgentKind, AgentState};
 use gtk4::gio;
 use gtk4::prelude::*;
 use std::cell::RefCell;
@@ -56,7 +57,7 @@ impl Ui {
     }
 
     pub fn apply(&self, update: &UiUpdate) {
-        self.sync_pets(&update.moods);
+        self.sync_pets(&update.moods, &update.sessions);
         self.monitor.set_sessions(&update.sessions);
         let (running, waiting) = (update.running, update.waiting);
         if let Some(tray) = &self.tray {
@@ -70,7 +71,11 @@ impl Ui {
     /// Reconciles the live pet windows with the agents that should be showing
     /// one: update existing pets' moods, spawn pets for newly-active agents,
     /// and close pets whose agent is no longer active.
-    fn sync_pets(&self, moods: &[(AgentKind, agentpet_core::state::PetMood)]) {
+    fn sync_pets(
+        &self,
+        moods: &[(AgentKind, agentpet_core::state::PetMood)],
+        sessions: &[AgentSession],
+    ) {
         let mut pets = self.pets.borrow_mut();
         let active: Vec<AgentKind> = moods.iter().map(|(k, _)| *k).collect();
 
@@ -99,6 +104,10 @@ impl Ui {
                 pet.set_pack(load_pack_for_kind(*kind).as_ref());
                 pet.set_mood(*mood);
                 pets.insert(*kind, pet);
+            }
+            // Refresh the waiting list whether the pet is new or existing.
+            if let Some(pet) = pets.get(kind) {
+                pet.set_waiting(waiting_rows_for(*kind, sessions));
             }
         }
     }
@@ -142,6 +151,34 @@ fn agent_display_name(kind: AgentKind) -> &'static str {
         })
 }
 
+/// The waiting sessions of one agent kind, newest first, as rows for the pet's
+/// caption. Only `Waiting` sessions are listed — working/done collapse into the
+/// single aggregate mood; waiting ones each need the user, so all are shown.
+fn waiting_rows_for(kind: AgentKind, sessions: &[AgentSession]) -> Vec<WaitingRow> {
+    let mut waiting: Vec<&AgentSession> = sessions
+        .iter()
+        .filter(|s| s.agent_kind == kind && s.state == AgentState::Waiting)
+        .collect();
+    waiting.sort_by(|a, b| b.updated_at.total_cmp(&a.updated_at));
+    waiting
+        .into_iter()
+        .map(|s| WaitingRow { project: project_name(s), state_since: s.state_since })
+        .collect()
+}
+
+/// Display name for a session: the project path's basename, else the session id.
+fn project_name(s: &AgentSession) -> String {
+    s.project
+        .as_deref()
+        .map(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.to_string())
+        })
+        .unwrap_or_else(|| s.id.clone())
+}
+
 /// Stable horizontal placement slot for an agent's pet, so each agent keeps a
 /// consistent spot. Mirrors `AgentKind`'s declaration order.
 fn kind_slot(kind: AgentKind) -> i32 {
@@ -172,4 +209,59 @@ pub(crate) fn load_pack_for_kind(kind: AgentKind) -> Option<PetPack> {
         }
     }
     first
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agentpet_core::state::AgentSource;
+
+    fn waiting(kind: AgentKind, id: &str, project: Option<&str>, at: f64) -> AgentSession {
+        AgentSession::new(
+            id,
+            kind,
+            project.map(String::from),
+            AgentState::Waiting,
+            None,
+            AgentSource::Hook,
+            at,
+        )
+    }
+
+    #[test]
+    fn waiting_rows_filter_by_kind_and_state() {
+        let sessions = vec![
+            waiting(AgentKind::Claude, "c1", Some("/home/u/agentpet-linux"), 10.0),
+            waiting(AgentKind::Codex, "x1", Some("/home/u/web-dash"), 20.0),
+            AgentSession::new(
+                "c2",
+                AgentKind::Claude,
+                Some("/home/u/busy".into()),
+                AgentState::Working,
+                None,
+                AgentSource::Hook,
+                30.0,
+            ),
+        ];
+        let rows = waiting_rows_for(AgentKind::Claude, &sessions);
+        // Only the Claude waiting session — not the Codex one, not the working one.
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].project, "agentpet-linux");
+    }
+
+    #[test]
+    fn waiting_rows_sorted_newest_first() {
+        let sessions = vec![
+            waiting(AgentKind::Claude, "old", Some("/a/old"), 10.0),
+            waiting(AgentKind::Claude, "new", Some("/a/new"), 99.0),
+        ];
+        let rows = waiting_rows_for(AgentKind::Claude, &sessions);
+        assert_eq!(rows.iter().map(|r| r.project.as_str()).collect::<Vec<_>>(), vec!["new", "old"]);
+    }
+
+    #[test]
+    fn project_name_falls_back_to_id() {
+        let s = waiting(AgentKind::Claude, "sess-123", None, 1.0);
+        assert_eq!(project_name(&s), "sess-123");
+    }
 }

@@ -2,6 +2,23 @@
 
 All notable changes to AgentPet for Linux.
 
+## 0.10.0 — 2026-06-09
+
+### Waiting sessions surface on the pet
+- **A session waiting on you is never hidden behind busy work.** Multiple sessions
+  of one agent collapse into a single pet, and `Working` used to win the mood — so
+  a session blocked on your input (a permission prompt, a question) was masked when
+  another session was still running. Now `Waiting` takes priority: when any session
+  of an agent is waiting, its pet turns to the waiting mood (tray goes amber) and
+  the caption lists **every** waiting session — amber dot + project + elapsed timer,
+  capped at 4 rows with a "+N nữa" overflow. With no waiting session the caption
+  stays the single aggregate state as before. Right-click still opens the Monitor.
+- **The Monitor list now sorts waiting sessions first too**, matching the pet
+  (`attention_priority`: waiting outranks working), so a "needs you" session floats
+  to the top in both surfaces.
+- Pet caption rendering split into `pet/caption.rs` (single-line state pill + the
+  waiting list) to keep `pet/mod.rs` focused.
+
 ## 0.9.0 — 2026-06-09
 
 ### Readable pet state

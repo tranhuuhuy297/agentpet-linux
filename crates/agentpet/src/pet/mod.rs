@@ -25,6 +25,10 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
+mod caption;
+pub use caption::WaitingRow;
+use caption::{draw_label, draw_waiting, waiting_block_height};
+
 /// Supported on-screen pet size range (px), matched by the Settings slider.
 pub const MIN_PET_SIZE: i32 = 80;
 pub const MAX_PET_SIZE: i32 = 200;
@@ -54,6 +58,12 @@ pub struct PetWindow {
     mood: Rc<Cell<PetMood>>,
     clips: Clips,
     bindings: Rc<RefCell<PetBindings>>,
+    /// Base square sprite size (px); the canvas grows taller than this when a
+    /// waiting list is shown below the sprite.
+    size: Rc<Cell<i32>>,
+    /// Sessions of this pet's agent that are waiting on the user; listed below
+    /// the sprite so a "needs you" session is never hidden behind busy work.
+    waiting: Rc<RefCell<Vec<WaitingRow>>>,
 }
 
 impl PetWindow {
@@ -90,17 +100,33 @@ impl PetWindow {
         let dragging = Rc::new(Cell::new(false));
         let clips: Clips = Rc::new(RefCell::new(Vec::new()));
         let bindings = Rc::new(RefCell::new(PetBindings::defaults(0)));
+        let size_cell = Rc::new(Cell::new(size));
+        let waiting: Rc<RefCell<Vec<WaitingRow>>> = Rc::new(RefCell::new(Vec::new()));
 
         let area = DrawingArea::new();
         area.set_content_width(size);
         area.set_content_height(size);
         {
-            let (mood, phase, clips, bindings) =
-                (mood.clone(), phase.clone(), clips.clone(), bindings.clone());
+            let (mood, phase, clips, bindings, waiting, size_cell) = (
+                mood.clone(),
+                phase.clone(),
+                clips.clone(),
+                bindings.clone(),
+                waiting.clone(),
+                size_cell.clone(),
+            );
             let label = label.to_string();
-            area.set_draw_func(move |_, cr, w, h| {
-                draw(cr, w, h, mood.get(), phase.get(), &clips.borrow(), &bindings.borrow());
-                draw_label(cr, w, h, &label, mood.get());
+            area.set_draw_func(move |_, cr, w, _h| {
+                // The sprite occupies the top square (w × base); any waiting list
+                // is drawn below it, so always lay the sprite against `base`.
+                let base = size_cell.get();
+                draw(cr, w, base, mood.get(), phase.get(), &clips.borrow(), &bindings.borrow());
+                let rows = waiting.borrow();
+                if rows.is_empty() {
+                    draw_label(cr, w, base, &label, mood.get());
+                } else {
+                    draw_waiting(cr, w, &label, &rows, crate::unix_now(), base);
+                }
             });
         }
         {
@@ -111,9 +137,10 @@ impl PetWindow {
             // Hold the area weakly so the timer self-cancels once this pet's
             // window is closed (a pet per agent comes and goes); a strong ref
             // would keep ticking and redrawing a destroyed widget forever.
-            let (mood, phase, dragging) = (mood.clone(), phase.clone(), dragging.clone());
+            let (mood, phase, dragging, waiting) =
+                (mood.clone(), phase.clone(), dragging.clone(), waiting.clone());
             let area_weak = area.downgrade();
-            let last_drawn = Cell::new((PetMood::Idle as u8, 0_usize, i32::MIN));
+            let last_drawn = Cell::new((PetMood::Idle as u8, 0_usize, i32::MIN, 0_u64));
             glib::timeout_add_local(std::time::Duration::from_millis(TICK_MS), move || {
                 let Some(area) = area_weak.upgrade() else {
                     return glib::ControlFlow::Break;
@@ -124,10 +151,15 @@ impl PetWindow {
                 let m = mood.get();
                 phase.set(phase.get() + phase_rate(m) * (TICK_MS as f64 / 1000.0));
                 let p = phase.get();
+                // When a waiting list is shown its timers tick every second, so
+                // fold whole seconds into the redraw key; otherwise it stays 0 and
+                // redraws remain gated on frame/bob changes (near-zero idle CPU).
+                let secs = if waiting.borrow().is_empty() { 0 } else { crate::unix_now() as u64 };
                 let key = (
                     m as u8,
                     (p * frame_rate(m)) as usize,
                     (p.sin() * bob_amplitude(m)).round() as i32,
+                    secs,
                 );
                 if last_drawn.get() != key {
                     last_drawn.set(key);
@@ -165,11 +197,37 @@ impl PetWindow {
 
         crate::ui::window_icon::install(&window); // otter in alt-tab
         window.present();
-        PetWindow { window, area, mood, clips, bindings }
+        PetWindow { window, area, mood, clips, bindings, size: size_cell, waiting }
     }
 
     pub fn set_mood(&self, mood: PetMood) {
         self.mood.set(mood);
+    }
+
+    /// Replaces the waiting-session list shown below the sprite. Resizes the
+    /// window only when the row count changes (so timers ticking in place don't
+    /// thrash geometry), then redraws.
+    pub fn set_waiting(&self, rows: Vec<WaitingRow>) {
+        let height_changed = rows.len() != self.waiting.borrow().len();
+        *self.waiting.borrow_mut() = rows;
+        if height_changed {
+            self.apply_geometry();
+        }
+        self.area.queue_draw();
+    }
+
+    /// Applies the current geometry: width = base size, height = base + the
+    /// waiting list's extra height. Pushes the size to GTK and straight to the WM
+    /// (XWayland won't reliably shrink a mapped, non-resizable window on its own).
+    fn apply_geometry(&self) {
+        let base = self.size.get();
+        let h = base + waiting_block_height(self.waiting.borrow().len());
+        self.area.set_content_width(base);
+        self.area.set_content_height(h);
+        self.window.set_default_size(base, h);
+        if let Some(xid) = window_xid(&self.window) {
+            let _ = resize_window(xid, base, h);
+        }
     }
 
     /// Resizes the pet live. The window is non-resizable and sized to its child,
@@ -178,16 +236,13 @@ impl PetWindow {
     /// `set_default_size` nudge helps WMs that otherwise keep a mapped,
     /// non-resizable window's larger allocation when shrinking under XWayland.
     pub fn set_size(&self, size: i32) {
-        self.area.set_content_width(size);
-        self.area.set_content_height(size);
-        self.window.set_default_size(size, size);
         // GTK won't reliably *shrink* a mapped, non-resizable window under
         // XWayland — Mutter keeps the larger allocation, so the pet stops
-        // shrinking once shown. Push the new geometry straight to the WM (the
-        // same X11 path we use to move the pet) so both directions work.
-        if let Some(xid) = window_xid(&self.window) {
-            let _ = resize_window(xid, size, size);
-        }
+        // shrinking once shown. `apply_geometry` pushes the new geometry straight
+        // to the WM (the same X11 path we use to move the pet) so both directions
+        // work, and folds in any waiting-list height.
+        self.size.set(size);
+        self.apply_geometry();
     }
 
     /// Closes and destroys the window (its agent went idle / ended).
@@ -323,89 +378,6 @@ fn draw_blob(cr: &CairoContext, w: i32, h: i32, mood: PetMood, bob: f64) {
         cr.set_source_rgba(0.05, 0.1, 0.15, 1.0);
         let _ = cr.fill();
     }
-}
-
-/// Draws the pet's at-a-glance state readout: a translucent pill at the bottom
-/// holding a mood-coloured status dot, the agent name, and the current state word
-/// (e.g. "● Claude Code · waiting"). The sprite animation alone doesn't reliably
-/// tell working/waiting/done apart, so the colour + word make the state
-/// unambiguous; the colour and wording match the Monitor so the two agree. The
-/// name also keeps pets sharing a pack identifiable. Font auto-shrinks so the
-/// caption fits the pet's width instead of clipping at the window edge.
-fn draw_label(cr: &CairoContext, w: i32, h: i32, name: &str, mood: PetMood) {
-    let (state_word, dot) = mood_caption(mood);
-    let text = if name.is_empty() {
-        state_word.to_string()
-    } else {
-        format!("{name} · {state_word}")
-    };
-
-    let (wf, hf) = (w as f64, h as f64);
-    cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
-
-    let (pad_x, pad_y) = (8.0, 4.0);
-    let dot_r = 4.0;
-    let dot_gap = 6.0;
-    // Non-text pill width (both paddings, the dot, and the dot→text gap). The
-    // remaining horizontal space, minus a small screen margin, is the budget for
-    // the glyphs; shrink the font to a floor when the caption would overflow.
-    let fixed = dot_r * 2.0 + dot_gap + pad_x * 2.0;
-    let avail_text = (wf - 4.0 - fixed).max(1.0);
-
-    let base = 13.0;
-    cr.set_font_size(base);
-    let Ok(probe) = cr.text_extents(&text) else { return };
-    let font_size = if probe.width() > avail_text {
-        (base * avail_text / probe.width()).max(8.0)
-    } else {
-        base
-    };
-    cr.set_font_size(font_size);
-    let Ok(ext) = cr.text_extents(&text) else { return };
-
-    let bw = fixed + ext.width();
-    let bh = ext.height() + pad_y * 2.0;
-    let bx = (wf - bw) / 2.0;
-    let by = hf - bh - 2.0;
-
-    rounded_rect(cr, bx, by, bw, bh, bh / 2.0);
-    cr.set_source_rgba(0.08, 0.09, 0.12, 0.66);
-    let _ = cr.fill();
-
-    // Status dot, vertically centred in the pill.
-    let (dr, dg, db) = dot;
-    cr.arc(bx + pad_x + dot_r, by + bh / 2.0, dot_r, 0.0, std::f64::consts::TAU);
-    cr.set_source_rgba(dr, dg, db, 1.0);
-    let _ = cr.fill();
-
-    // Caption text, starting just after the dot.
-    cr.set_source_rgba(0.96, 0.97, 1.0, 0.96);
-    let text_x = bx + pad_x + dot_r * 2.0 + dot_gap - ext.x_bearing();
-    cr.move_to(text_x, by + pad_y - ext.y_bearing());
-    let _ = cr.show_text(&text);
-}
-
-/// State word + status-dot colour for a mood. Matches the Monitor's wording and
-/// palette (`monitor.rs`) so the pet and the Monitor never disagree about state.
-/// `Celebrate` (the transient played when a turn finishes) reads as "done".
-fn mood_caption(mood: PetMood) -> (&'static str, (f64, f64, f64)) {
-    match mood {
-        PetMood::Working => ("working", (0.290, 0.776, 0.941)), // #4ac6f0
-        PetMood::Waiting => ("waiting", (0.941, 0.690, 0.125)), // #f0b020
-        PetMood::Done | PetMood::Celebrate => ("done", (0.337, 0.831, 0.447)), // #56d472
-        PetMood::Idle => ("idle", (0.400, 0.400, 0.400)),       // #666666
-    }
-}
-
-fn rounded_rect(cr: &CairoContext, x: f64, y: f64, w: f64, h: f64, r: f64) {
-    use std::f64::consts::{FRAC_PI_2, PI};
-    let r = r.min(w / 2.0).min(h / 2.0);
-    cr.new_sub_path();
-    cr.arc(x + w - r, y + r, r, -FRAC_PI_2, 0.0);
-    cr.arc(x + w - r, y + h - r, r, 0.0, FRAC_PI_2);
-    cr.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
-    cr.arc(x + r, y + r, r, PI, 3.0 * FRAC_PI_2);
-    cr.close_path();
 }
 
 fn mood_color(mood: PetMood) -> (f64, f64, f64) {

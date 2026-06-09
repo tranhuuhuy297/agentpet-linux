@@ -11,13 +11,15 @@ impl MoodResolver {
     /// `Celebrate` is never returned here; it is a transient the pet controller
     /// plays when entering `Done` (see the app layer).
     pub fn aggregate(sessions: &[AgentSession]) -> PetMood {
-        // Running work takes priority: the pet reflects what is active now.
-        // `Registered` (agent open but idle) is not "working".
-        if sessions.iter().any(|s| s.state == AgentState::Working) {
-            return PetMood::Working;
-        }
+        // `Waiting` takes top priority: a session blocked on the user needs action,
+        // so the pet must surface it even while another session is still working —
+        // otherwise a "needs you" session hides behind busy work. Then running
+        // work, then a finished turn. `Registered`/`Idle` are not attention-worthy.
         if sessions.iter().any(|s| s.state == AgentState::Waiting) {
             return PetMood::Waiting;
+        }
+        if sessions.iter().any(|s| s.state == AgentState::Working) {
+            return PetMood::Working;
         }
         if sessions.iter().any(|s| s.state == AgentState::Done) {
             return PetMood::Done;
@@ -65,12 +67,19 @@ mod tests {
     }
 
     #[test]
-    fn working_wins() {
+    fn waiting_wins_over_working() {
+        // A session blocked on the user must surface even while another works.
         let s = [
             session(AgentState::Working, "a"),
             session(AgentState::Waiting, "b"),
             session(AgentState::Done, "c"),
         ];
+        assert_eq!(MoodResolver::aggregate(&s), PetMood::Waiting);
+    }
+
+    #[test]
+    fn working_wins_over_done() {
+        let s = [session(AgentState::Done, "a"), session(AgentState::Working, "b")];
         assert_eq!(MoodResolver::aggregate(&s), PetMood::Working);
     }
 
@@ -119,14 +128,15 @@ mod tests {
 
     #[test]
     fn by_kind_aggregates_within_a_kind() {
-        // Two Claude sessions collapse into one Claude pet (working wins).
+        // Two Claude sessions collapse into one Claude pet (waiting wins, so the
+        // session needing the user isn't hidden behind the working one).
         let s = [
             session_of(AgentKind::Claude, AgentState::Waiting, "c1"),
             session_of(AgentKind::Claude, AgentState::Working, "c2"),
         ];
         assert_eq!(
             MoodResolver::aggregate_by_kind(&s),
-            vec![(AgentKind::Claude, PetMood::Working)]
+            vec![(AgentKind::Claude, PetMood::Waiting)]
         );
     }
 

@@ -302,6 +302,6 @@ mod tests {
         store.apply(&event("Notification", "waiting", None), T0);
         store.apply(&event("Stop", "done", None), T0);
         let order: Vec<String> = store.sorted().into_iter().map(|s| s.id).collect();
-        assert_eq!(order, vec!["working", "waiting", "done"]);
+        assert_eq!(order, vec!["waiting", "working", "done"]);
     }
 }

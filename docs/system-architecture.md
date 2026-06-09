@@ -69,18 +69,25 @@ expired files as it writes.
 
 ### Mood aggregation — one pet per agent
 `MoodResolver::aggregate` reduces a set of sessions to a single mood by priority:
-`working > waiting > done > idle`. `MoodResolver::aggregate_by_kind` groups
-sessions by `AgentKind` and runs that reduction per group, dropping any kind
-whose mood is `idle` — so the result is one mood per agent that currently has a
-live, attention-worthy session.
+`waiting > working > done > idle`. Waiting wins so a session blocked on the user
+is never masked by another that is still running. `MoodResolver::aggregate_by_kind`
+groups sessions by `AgentKind` and runs that reduction per group, dropping any
+kind whose mood is `idle` — so the result is one mood per agent that currently has
+a live, attention-worthy session. The Monitor list applies the same priority via
+`AgentState::attention_priority` (waiting first), so pet and Monitor agree.
 
 The GTK layer (`ui::Ui::sync_pets`) keeps one floating pet window per active
 agent kind: a pet appears when its agent starts working/waiting/finishing and is
 closed when that agent goes idle or ends. Each agent renders its own pet pack —
 `Config::pet_id_for(kind)` returns the agent's pick (`agent_pet_ids`) or the
 global `selected_pet_id` default. Pets are placed in stable per-kind slots so
-they don't overlap. Per-session detail still lives in the monitor window and the
-tray count (both remain aggregate across all agents).
+they don't overlap.
+
+When an agent has waiting sessions, its pet lists them below the sprite (project
++ elapsed timer, capped at 4 with a "+N" overflow) so each "needs you" session is
+visible at a glance; with none waiting the pet shows the single aggregate state.
+The caption rendering lives in `pet/caption.rs`. Fuller per-session detail still
+lives in the monitor window and the tray count (both aggregate across all agents).
 
 ### Pet packs — local Petdex install
 AgentPet hosts no art and downloads nothing. Pets are installed by the user with
