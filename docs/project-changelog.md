@@ -2,6 +2,17 @@
 
 All notable changes to AgentPet for Linux.
 
+## 0.11.0 — 2026-06-09
+
+### Waiting header reads like the other states
+- **The waiting list's header now shows the state beside the agent name** —
+  `● Claude Code · waiting`, matching the single-line `working`/`done` caption
+  style instead of showing the bare agent name.
+
+### Landing page
+- The hero pet caption now shows the coding-agent name (**"Claude Code"**) rather
+  than the pet pack's name, so the demo reads as the agent it represents.
+
 ## 0.10.0 — 2026-06-09
 
 ### Waiting sessions surface on the pet

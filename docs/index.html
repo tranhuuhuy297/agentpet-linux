@@ -398,7 +398,7 @@ html.no-js .reveal { opacity:1; transform:none; }
       </div>
 
       <div class="pet" id="pet" data-mood="working" title="Drag me around — click to wave!">
-        <span class="caption" id="petCaption">Boba · working</span>
+        <span class="caption" id="petCaption">Claude Code · working</span>
         <div class="boba-aura"></div>
         <div class="boba-sprite" id="bobaSprite"></div>
       </div>
@@ -559,7 +559,7 @@ const sprite=(()=>{
 const MOOD_CLIP={ idle:'idle', working:'running', waiting:'waiting', done:'waving', celebrate:'jumping' };
 let currentMood='working', dragDir=null;
 function playMood(){ if(currentMood==='done'){ sprite.play('jumping',{loop:false, then:()=>sprite.play('waving',{loop:true})}); } else { sprite.play(MOOD_CLIP[currentMood]||'idle',{loop:true}); } }
-function setMood(m){ currentMood=m; pet.dataset.mood=m; petCaption.textContent='Boba · '+(m==='done'?'done 🎉':m); if(!pet.classList.contains('dragging')) playMood(); }
+function setMood(m){ currentMood=m; pet.dataset.mood=m; petCaption.textContent='Claude Code · '+(m==='done'?'done 🎉':m); if(!pet.classList.contains('dragging')) playMood(); }
 function renderScene(i){
   const s = SCENES[i]; timers = {};
   setMood(s.mood);
@@ -599,7 +599,7 @@ pet.addEventListener('pointermove', e=>{
   if(!drag) return;
   const dx=e.clientX-drag.sx, dy=e.clientY-drag.sy;
   if(Math.abs(dx)+Math.abs(dy) > 4){
-    if(!drag.moved){ drag.moved=true; pet.classList.remove('hop','waving'); pet.classList.add('dragging'); petCaption.textContent='Boba · wheee!'; }
+    if(!drag.moved){ drag.moved=true; pet.classList.remove('hop','waving'); pet.classList.add('dragging'); petCaption.textContent='Claude Code · wheee!'; }
     const mvx = e.clientX - drag.lastx;
     if(mvx > 1 && dragDir!=='r'){ dragDir='r'; sprite.play('runRight',{loop:true}); }
     else if(mvx < -1 && dragDir!=='l'){ dragDir='l'; sprite.play('runLeft',{loop:true}); }
@@ -614,7 +614,7 @@ function endDrag(e){
   pet.classList.remove('dragging');
   dragDir=null;
   if(moved){
-    petCaption.textContent = 'Boba · ' + (currentMood==='done'?'done 🎉':currentMood);
+    petCaption.textContent = 'Claude Code · ' + (currentMood==='done'?'done 🎉':currentMood);
     sprite.play('jumping',{loop:false, then:playMood});
   } else {
     sprite.play('waving',{loop:false, then:playMood});

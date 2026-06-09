@@ -103,7 +103,10 @@ pub(crate) fn draw_waiting(
     let amber = mood_caption(PetMood::Waiting).1;
     let mut y = sprite_h as f64 + GAP_TOP;
 
-    draw_pill(cr, w, y, name, None);
+    // Header reads like the single-line caption ("● Claude Code · waiting") so the
+    // waiting state shows beside the agent name, consistent with working/done.
+    let header = if name.is_empty() { "waiting".to_string() } else { format!("{name} · waiting") };
+    draw_pill(cr, w, y, &header, Some(amber));
     y += ROW_PITCH;
 
     for row in rows.iter().take(MAX_ROWS) {
