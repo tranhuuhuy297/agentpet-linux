@@ -23,7 +23,12 @@ pub fn run_gui() -> ExitCode {
     let _lock = match crate::daemon::single_instance::acquire() {
         Some(lock) => lock,
         None => {
-            eprintln!("agentpet is already running");
+            // Already running. Rather than silently exit (which made clicking the
+            // dock/launcher icon do nothing), ask the live instance to surface its
+            // monitor window, then exit. Best-effort: if the socket isn't up yet
+            // the click is simply a no-op, as before.
+            eprintln!("agentpet is already running — surfacing the monitor");
+            signal_show_monitor();
             return ExitCode::SUCCESS;
         }
     };
@@ -39,9 +44,10 @@ pub fn run_gui() -> ExitCode {
     let (cmd_tx, cmd_rx) = async_channel::unbounded::<UiCommand>();
 
     // Socket server + session store on a dedicated Tokio thread.
+    let cmd_tx_socket = cmd_tx.clone();
     std::thread::spawn(move || match crate::daemon::build_runtime() {
         Ok(rt) => rt.block_on(async move {
-            crate::daemon::serve(Some(ui_tx)).await;
+            crate::daemon::serve(Some(ui_tx), Some(cmd_tx_socket)).await;
         }),
         Err(e) => eprintln!("agentpet: runtime error: {e}"),
     });
@@ -97,6 +103,18 @@ pub fn run_gui() -> ExitCode {
     // No positional args — don't treat anything as files to open.
     let _ = app.run_with_args::<&str>(&[]);
     ExitCode::SUCCESS
+}
+
+/// Tells the already-running instance to surface its monitor window by sending a
+/// control frame over the daemon socket. Best-effort and synchronous — we're
+/// about to exit, so a failed connect (socket not bound yet) just leaves the
+/// click as a no-op, matching the prior behaviour.
+fn signal_show_monitor() {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    if let Ok(mut stream) = UnixStream::connect(agentpet_core::ipc::socket_path()) {
+        let _ = stream.write_all(agentpet_core::ipc::CONTROL_SHOW_MONITOR);
+    }
 }
 
 /// Rewrites every already-enabled agent hook so its embedded binary path points

@@ -8,7 +8,7 @@
 
 pub mod single_instance;
 
-use crate::snapshot::UiUpdate;
+use crate::snapshot::{UiCommand, UiUpdate};
 use agentpet_core::ipc;
 use agentpet_core::mapper::StateMapper;
 use agentpet_core::session::{AgentSession, SessionStore};
@@ -21,6 +21,9 @@ use tokio::net::{UnixListener, UnixStream};
 
 type Store = Arc<Mutex<SessionStore>>;
 type Sink = Option<Sender<UiUpdate>>;
+/// Lets the socket forward UI control frames (a second launch asking to surface
+/// the monitor) to the GTK thread. `None` when headless.
+type CmdSink = Option<Sender<UiCommand>>;
 
 /// Runs the daemon headless (no UI) to completion on a fresh Tokio runtime.
 pub fn run_headless() -> ExitCode {
@@ -29,7 +32,7 @@ pub fn run_headless() -> ExitCode {
         return ExitCode::FAILURE;
     };
     match build_runtime() {
-        Ok(rt) => rt.block_on(serve(None)),
+        Ok(rt) => rt.block_on(serve(None, None)),
         Err(e) => {
             eprintln!("agentpet: failed to start runtime: {e}");
             ExitCode::FAILURE
@@ -41,8 +44,9 @@ pub fn build_runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread().enable_all().build()
 }
 
-/// The socket server. Emits a snapshot through `sink` on every change.
-pub async fn serve(sink: Sink) -> ExitCode {
+/// The socket server. Emits a snapshot through `sink` on every change and
+/// forwards UI control frames through `cmd` (both `None` when headless).
+pub async fn serve(sink: Sink, cmd: CmdSink) -> ExitCode {
     let _ = std::fs::create_dir_all(ipc::base_dir());
     crate::notify::init(); // notifications run on a dedicated thread, off the runtime
     let store: Store = Arc::new(Mutex::new(SessionStore::new()));
@@ -77,16 +81,26 @@ pub async fn serve(sink: Sink) -> ExitCode {
             Ok((stream, _)) => {
                 let store = store.clone();
                 let sink = sink.clone();
-                tokio::spawn(async move { handle_client(stream, store, sink).await });
+                let cmd = cmd.clone();
+                tokio::spawn(async move { handle_client(stream, store, sink, cmd).await });
             }
             Err(e) => eprintln!("agentpet: accept error: {e}"),
         }
     }
 }
 
-async fn handle_client(mut stream: UnixStream, store: Store, sink: Sink) {
+async fn handle_client(mut stream: UnixStream, store: Store, sink: Sink, cmd: CmdSink) {
     let mut buf = Vec::new();
     if stream.read_to_end(&mut buf).await.is_err() {
+        return;
+    }
+    // A second launch sends this instead of starting a duplicate; surface the
+    // monitor on the running instance so clicking the dock/launcher icon does
+    // something useful.
+    if ipc::is_show_monitor(&buf) {
+        if let Some(tx) = &cmd {
+            let _ = tx.try_send(UiCommand::ShowMonitor);
+        }
         return;
     }
     let events = ipc::decode_lines(&buf);

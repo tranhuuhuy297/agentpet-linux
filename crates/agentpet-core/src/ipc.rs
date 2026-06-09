@@ -31,6 +31,19 @@ pub fn encode_line(event: &AgentEvent) -> serde_json::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// A control frame the GUI sends over the same socket as event lines. It starts
+/// with a NUL byte so it never collides with event lines (which are JSON objects
+/// starting with `{`) and is harmlessly skipped by `decode_lines` if a consumer
+/// doesn't special-case it. Sent by a second launch to surface the already-
+/// running instance's monitor window instead of starting a duplicate.
+pub const CONTROL_SHOW_MONITOR: &[u8] = b"\x00show_monitor\n";
+
+/// True when a received buffer is exactly the show-monitor control frame
+/// (tolerant of a missing trailing newline).
+pub fn is_show_monitor(data: &[u8]) -> bool {
+    data.strip_suffix(b"\n").unwrap_or(data) == b"\x00show_monitor"
+}
+
 /// Decodes newline-delimited JSON into events, skipping empty/undecodable lines
 /// (mirrors the daemon's tolerant `decodeLines`).
 pub fn decode_lines(data: &[u8]) -> Vec<AgentEvent> {
@@ -84,6 +97,16 @@ mod tests {
         assert_eq!(*line.last().unwrap(), b'\n');
         let decoded = decode_lines(&line);
         assert_eq!(decoded, vec![ev]);
+    }
+
+    #[test]
+    fn show_monitor_control_frame_is_recognised_and_not_an_event() {
+        assert!(is_show_monitor(CONTROL_SHOW_MONITOR));
+        assert!(is_show_monitor(b"\x00show_monitor")); // missing trailing newline
+        assert!(!is_show_monitor(b"show_monitor")); // missing NUL guard
+        assert!(!is_show_monitor(b"{\"x\":1}")); // a real event line
+        // The control frame must never decode as an event.
+        assert!(decode_lines(CONTROL_SHOW_MONITOR).is_empty());
     }
 
     #[test]
