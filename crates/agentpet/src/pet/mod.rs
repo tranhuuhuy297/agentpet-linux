@@ -414,17 +414,21 @@ fn apply_pet_traits(window: u32) -> Result<(), Box<dyn std::error::Error>> {
     let above = intern(&conn, b"_NET_WM_STATE_ABOVE")?;
     let skip_taskbar = intern(&conn, b"_NET_WM_STATE_SKIP_TASKBAR")?;
     let skip_pager = intern(&conn, b"_NET_WM_STATE_SKIP_PAGER")?;
+    // Sticky keeps the pet on screen across every workspace — without it the pet
+    // lives on one virtual desktop and vanishes when the user switches.
+    let sticky = intern(&conn, b"_NET_WM_STATE_STICKY")?;
 
     conn.change_property32(
         PropMode::REPLACE,
         window,
         net_wm_state,
         AtomEnum::ATOM,
-        &[above, skip_taskbar, skip_pager],
+        &[above, skip_taskbar, skip_pager, sticky],
     )?;
     const ADD: u32 = 1;
     const SOURCE_APP: u32 = 1;
-    for (a, b) in [(above, skip_taskbar), (skip_pager, 0)] {
+    // Two states per client message (EWMH allows data[1] and data[2]).
+    for (a, b) in [(above, skip_taskbar), (skip_pager, sticky)] {
         let data = ClientMessageData::from([ADD, a, b, SOURCE_APP, 0]);
         let event = ClientMessageEvent::new(32, window, net_wm_state, data);
         conn.send_event(
@@ -434,6 +438,28 @@ fn apply_pet_traits(window: u32) -> Result<(), Box<dyn std::error::Error>> {
             event,
         )?;
     }
+
+    // Belt-and-suspenders for "all workspaces": some compositors honour the
+    // _NET_WM_DESKTOP = 0xFFFFFFFF (all-desktops) hint more reliably than the
+    // sticky state. Set both the property and the client message.
+    let net_wm_desktop = intern(&conn, b"_NET_WM_DESKTOP")?;
+    const ALL_DESKTOPS: u32 = 0xFFFF_FFFF;
+    conn.change_property32(
+        PropMode::REPLACE,
+        window,
+        net_wm_desktop,
+        AtomEnum::CARDINAL,
+        &[ALL_DESKTOPS],
+    )?;
+    let data = ClientMessageData::from([ALL_DESKTOPS, SOURCE_APP, 0, 0, 0]);
+    let event = ClientMessageEvent::new(32, window, net_wm_desktop, data);
+    conn.send_event(
+        false,
+        root,
+        EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+        event,
+    )?;
+
     conn.flush()?;
     Ok(())
 }
