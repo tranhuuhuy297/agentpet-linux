@@ -24,32 +24,102 @@ SRC_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo .)"
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
 APP_DIR="$PREFIX/share/applications"
-ICON_DIR="$PREFIX/share/icons/hicolor/512x512/apps"
+HICOLOR="$PREFIX/share/icons/hicolor"
+ICON_DIR="$HICOLOR/512x512/apps"
 
 BIN="$BIN_DIR/agentpet"
-# The desktop file basename MUST equal the GTK application_id so GNOME maps the
-# running windows (pet/monitor/settings) to this entry and shows the real icon
-# in the dock/alt-tab — not just the app-menu launcher.
-DESKTOP="$APP_DIR/io.github.tranhuuhuy297.agentpet.desktop"
-ICON="$ICON_DIR/agentpet.png"
-# Pre-otter installs put an svg here; cleaned up on install/uninstall.
-LEGACY_ICON="$PREFIX/share/icons/hicolor/scalable/apps/agentpet.svg"
+# Icon, desktop-file basename, and the GTK application_id all share this
+# reverse-DNS name so GNOME maps the running windows (pet/monitor/settings) to
+# this entry and resolves Icon= via the theme — in the dock/alt-tab and the
+# app grid, not just the launcher.
+APP_ID="io.github.tranhuuhuy297.agentpet"
+DESKTOP="$APP_DIR/$APP_ID.desktop"
+ICON="$ICON_DIR/$APP_ID.png"
+# Pre-otter installs put an svg here; the bare-name PNG predates the app-id
+# rename. Both are cleaned up on install/uninstall.
+LEGACY_ICON="$HICOLOR/scalable/apps/agentpet.svg"
+LEGACY_PNG="$ICON_DIR/agentpet.png"
 # Earlier installs named the desktop file plainly; remove it so there is no
 # duplicate launcher after the rename to match the application_id.
 LEGACY_DESKTOP="$APP_DIR/agentpet.desktop"
 
+# gnome-shell's icon loader (St) only scans a hicolor dir that has its own
+# index.theme; without it the dir is ignored and Icon= resolves to a generic
+# gear even though GTK can find the PNG. A per-user ~/.local hicolor has none, so
+# write a minimal one. The 512 dir is Scalable so a single 512 icon still serves
+# small dock/grid requests when no pre-scaler is available at install time.
+ensure_hicolor_index() {
+  local idx="$HICOLOR/index.theme"
+  [ -f "$idx" ] && return 0
+  mkdir -p "$HICOLOR"
+  cat > "$idx" <<'EOF'
+[Icon Theme]
+Name=Hicolor
+Comment=Fallback icon theme
+Hidden=true
+Directories=48x48/apps,64x64/apps,128x128/apps,256x256/apps,512x512/apps
+
+[48x48/apps]
+Size=48
+Context=Applications
+Type=Fixed
+
+[64x64/apps]
+Size=64
+Context=Applications
+Type=Fixed
+
+[128x128/apps]
+Size=128
+Context=Applications
+Type=Fixed
+
+[256x256/apps]
+Size=256
+Context=Applications
+Type=Fixed
+
+[512x512/apps]
+Size=512
+MinSize=16
+MaxSize=512
+Context=Applications
+Type=Scalable
+EOF
+}
+
+# Install the app icon under the application-id name at 512 plus, when a scaler
+# is available, the small sizes the dock/grid request directly. Also drop a flat
+# pixmaps copy as a last-resort lookup and ensure the theme index exists.
+install_icon() {
+  local src="$1" s d scaler=""
+  install -Dm644 "$src" "$ICON"
+  if command -v python3 >/dev/null && python3 -c "import PIL" 2>/dev/null; then scaler=pil
+  elif command -v convert >/dev/null; then scaler=im
+  elif command -v gm >/dev/null; then scaler=gm; fi
+  if [ -n "$scaler" ]; then
+    for s in 48 64 128 256; do
+      d="$HICOLOR/${s}x${s}/apps/$APP_ID.png"; mkdir -p "$(dirname "$d")"
+      case "$scaler" in
+        pil) python3 -c "from PIL import Image;Image.open('$src').resize(($s,$s),Image.LANCZOS).save('$d')" 2>/dev/null ;;
+        im)  convert "$src" -resize "${s}x${s}" "$d" 2>/dev/null ;;
+        gm)  gm convert "$src" -resize "${s}x${s}" "$d" 2>/dev/null ;;
+      esac
+    done
+  fi
+  install -Dm644 "$src" "$PREFIX/share/pixmaps/$APP_ID.png"
+  ensure_hicolor_index
+}
+
 refresh_caches() {
   command -v update-desktop-database >/dev/null && update-desktop-database "$APP_DIR" 2>/dev/null || true
-  # A per-user hicolor dir has no index.theme, so plain gtk-update-icon-cache
-  # fails ("No theme index file") and leaves the previous cache in place — a
-  # stale cache then shadows the freshly-installed PNG and the dock falls back to
-  # a generic icon. --ignore-theme-index builds the cache without an index; if
-  # even that fails, drop any stale cache and bump the dir mtime so GTK/GNOME
-  # re-scan the directory and pick up the icon directly.
-  local hicolor="$PREFIX/share/icons/hicolor"
+  # With index.theme in place gtk-update-icon-cache succeeds normally; -t is a
+  # belt-and-suspenders for odd setups, and dropping a stale cache + touching the
+  # dir is the final fallback so GTK/GNOME re-scan and find the icon.
   if command -v gtk-update-icon-cache >/dev/null; then
-    gtk-update-icon-cache -q -f -t "$hicolor" 2>/dev/null \
-      || { rm -f "$hicolor/icon-theme.cache" 2>/dev/null; touch "$hicolor" 2>/dev/null; }
+    gtk-update-icon-cache -q -f "$HICOLOR" 2>/dev/null \
+      || gtk-update-icon-cache -q -f -t "$HICOLOR" 2>/dev/null \
+      || { rm -f "$HICOLOR/icon-theme.cache" 2>/dev/null; touch "$HICOLOR" 2>/dev/null; }
   fi
 }
 
@@ -114,13 +184,26 @@ ensure_build_deps() {
 # Install the desktop entry + icon from the local repo when present, else fetch
 # them from the repo (so curl | bash with no checkout still gets them).
 install_assets() {
-  if [ -f "$SRC_DIR/assets/io.github.tranhuuhuy297.agentpet.desktop" ]; then
-    install -Dm644 "$SRC_DIR/assets/io.github.tranhuuhuy297.agentpet.desktop" "$DESKTOP"
-    install -Dm644 "$SRC_DIR/assets/agentpet.png" "$ICON"
+  local src_desktop="" src_png="" tmp=""
+  if [ -f "$SRC_DIR/assets/$APP_ID.desktop" ]; then
+    src_desktop="$SRC_DIR/assets/$APP_ID.desktop"
+    src_png="$SRC_DIR/assets/agentpet.png"
   else
-    local tmp; tmp="$(mktemp -d)"
-    curl -fsSL "$RAW/assets/io.github.tranhuuhuy297.agentpet.desktop" -o "$tmp/d" 2>/dev/null && install -Dm644 "$tmp/d" "$DESKTOP" || true
-    curl -fsSL "$RAW/assets/agentpet.png" -o "$tmp/i" 2>/dev/null && install -Dm644 "$tmp/i" "$ICON" || true
+    tmp="$(mktemp -d)"
+    curl -fsSL "$RAW/assets/$APP_ID.desktop" -o "$tmp/d" 2>/dev/null && src_desktop="$tmp/d"
+    curl -fsSL "$RAW/assets/agentpet.png" -o "$tmp/i" 2>/dev/null && src_png="$tmp/i"
+  fi
+  if [ -n "$src_desktop" ] && [ -f "$src_desktop" ]; then
+    install -Dm644 "$src_desktop" "$DESKTOP"
+    # gnome-shell's PATH usually omits ~/.local/bin, so a bare "Exec=agentpet"
+    # can't be launched and the entry is hidden from the app grid. Pin the
+    # absolute binary path, like other well-behaved per-user launchers.
+    sed -i "s|^Exec=agentpet\$|Exec=$BIN|" "$DESKTOP"
+  fi
+  if [ -n "$src_png" ] && [ -f "$src_png" ]; then
+    install_icon "$src_png"
+  fi
+  if [ -n "$tmp" ]; then
     rm -rf "$tmp"
   fi
 }
@@ -135,7 +218,7 @@ finalize_install() {
   echo "==> Installing to $PREFIX"
   install -Dm755 "$src" "$BIN"
   install_assets
-  rm -f "$LEGACY_ICON" "$LEGACY_DESKTOP"
+  rm -f "$LEGACY_ICON" "$LEGACY_PNG" "$LEGACY_DESKTOP"
   refresh_caches
 
   if [ -n "$was_running" ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
@@ -228,7 +311,9 @@ do_uninstall() {
   fi
 
   echo "==> Removing installed files…"
-  rm -f "$BIN" "$DESKTOP" "$ICON" "$LEGACY_ICON" "$LEGACY_DESKTOP"
+  rm -f "$BIN" "$DESKTOP" "$ICON" "$LEGACY_ICON" "$LEGACY_PNG" "$LEGACY_DESKTOP"
+  rm -f "$PREFIX/share/pixmaps/$APP_ID.png"
+  for s in 48 64 128 256; do rm -f "$HICOLOR/${s}x${s}/apps/$APP_ID.png"; done
   refresh_caches
 
   if [ "$keep_data" = "--keep-data" ]; then

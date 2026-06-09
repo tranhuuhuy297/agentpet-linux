@@ -71,14 +71,15 @@ pub fn build() -> ScrolledWindow {
     scrolled
 }
 
-/// The installed app icon ("agentpet" in the hicolor theme), falling back to
-/// the repo asset when running from a source checkout.
+/// The installed app icon (named after the application id in the hicolor theme),
+/// falling back to the repo asset when running from a source checkout.
 fn app_icon() -> Image {
+    const APP_ID: &str = "io.github.tranhuuhuy297.agentpet";
     let themed = gtk4::gdk::Display::default()
-        .map(|d| gtk4::IconTheme::for_display(&d).has_icon("agentpet"))
+        .map(|d| gtk4::IconTheme::for_display(&d).has_icon(APP_ID))
         .unwrap_or(false);
     if themed {
-        return Image::from_icon_name("agentpet");
+        return Image::from_icon_name(APP_ID);
     }
     // Source checkout: target/{debug,release}/agentpet → ../../../assets/.
     if let Ok(exe) = std::env::current_exe() {

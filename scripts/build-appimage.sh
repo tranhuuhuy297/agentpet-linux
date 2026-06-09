@@ -28,7 +28,7 @@ rm -rf "$APPDIR"
 echo "==> staging AppDir"
 install -Dm755 target/release/agentpet "$APPDIR/usr/bin/agentpet"
 install -Dm644 assets/io.github.tranhuuhuy297.agentpet.desktop "$APPDIR/usr/share/applications/io.github.tranhuuhuy297.agentpet.desktop"
-install -Dm644 assets/agentpet.png "$APPDIR/usr/share/icons/hicolor/512x512/apps/agentpet.png"
+install -Dm644 assets/agentpet.png "$APPDIR/usr/share/icons/hicolor/512x512/apps/io.github.tranhuuhuy297.agentpet.png"
 
 # Force the X11 backend (the pet relies on XWayland) from inside the AppImage.
 cat > "$APPDIR/apprun-hook.sh" <<'EOF'
@@ -41,7 +41,7 @@ export DEPLOY_GTK_VERSION=4
   --plugin gtk \
   --custom-apprun "$APPDIR/apprun-hook.sh" \
   --desktop-file "$APPDIR/usr/share/applications/io.github.tranhuuhuy297.agentpet.desktop" \
-  --icon-file "$APPDIR/usr/share/icons/hicolor/512x512/apps/agentpet.png" \
+  --icon-file "$APPDIR/usr/share/icons/hicolor/512x512/apps/io.github.tranhuuhuy297.agentpet.png" \
   --output appimage
 
 echo
