@@ -36,10 +36,11 @@ working while it runs and done when it exits.
 Like [`cliccy`](https://github.com/tranhuuhuy297/cliccy), the app forces
 `GDK_BACKEND=x11` so its windows run under **XWayland** as normal keep-above
 windows that GNOME maps reliably (works on both Ubuntu X11 and Wayland
-sessions). The floating pet's always-on-top / skip-taskbar / click-through bits
-are set via raw X11 (`x11rb`) on the window XID, since GTK4 removed those WM
-hints. The tray uses **StatusNotifierItem** (`ksni`) and requires the GNOME
-**AppIndicator** extension.
+sessions). The floating pet's always-on-top / skip-taskbar / sticky
+(all-workspaces) / click-through bits are set via raw X11 (`x11rb`) on the
+window XID, since GTK4 removed those WM hints. The tray uses
+**StatusNotifierItem** (`ksni`) and requires the GNOME **AppIndicator**
+extension.
 
 ## Install
 
@@ -73,8 +74,9 @@ lets you assign one per agent (see [Pets](#pets) below).
   Codex session run `/hooks` and trust `agentpet hook --agent codex` — until you
   do, Codex reports no state and its pet never appears.
 - **Tray icon** needs the GNOME *AppIndicator and KStatusNotifierItem Support*
-  extension. Without it the app still runs; reach Settings/Quit from the monitor
-  window (right-click the pet).
+  extension. Without it the app still runs; reopen the Monitor by clicking the
+  AgentPet dock/app-grid icon again (or right-click the pet), and reach
+  Settings/Quit from there.
 - **Portable build:** `./scripts/build-appimage.sh` produces an AppImage that
   bundles GTK4/libadwaita for older distros.
 - **Update:** `agentpet update` pulls the latest GitHub release.
@@ -87,7 +89,8 @@ lets you assign one per agent (see [Pets](#pets) below).
 
 The exact inverse of install: `agentpet uninstall` strips AgentPet's own hook
 entries from every agent config (foreign hooks untouched) and disables
-launch-at-login; then the three installed files and `~/.agentpet` are removed.
+launch-at-login; then the installed files (binary, desktop entry, icons) and
+`~/.agentpet` are removed.
 Pass `--keep-data` to preserve `~/.agentpet` (the replay queue). Installed pets
 live in `~/.petdex/pets` (managed by the Petdex CLI) and are left untouched.
 

@@ -2,6 +2,41 @@
 
 All notable changes to AgentPet for Linux.
 
+## 0.8.0 — 2026-06-09
+
+### Pet on every workspace
+- **Pets now follow you across virtual desktops.** A pet lived on the single
+  workspace it spawned on, so switching workspaces made it disappear. Each pet
+  window now sets `_NET_WM_STATE_STICKY` and `_NET_WM_DESKTOP = 0xFFFFFFFF`
+  (all-desktops) alongside its existing keep-above / skip-taskbar traits, so it
+  stays visible on whichever workspace you're on.
+
+### Reopen the Monitor by clicking the app icon
+- **Clicking the dock/launcher icon while AgentPet is running now opens the
+  Monitor.** Previously a second launch just printed "already running" and
+  exited, so the click did nothing (a problem when the tray isn't available). The
+  second launch now sends a control frame over the daemon socket and the running
+  instance surfaces its Monitor window, then exits.
+
+### App grid + dock icon
+- **AgentPet now appears in the Ubuntu app list with the otter icon, and the
+  dock entry shows the otter too** — completing the icon work started in 0.7.0.
+  Several install-side issues remained:
+  - The desktop entry used `Exec=agentpet` (bare). gnome-shell's PATH doesn't
+    include `~/.local/bin`, so it couldn't resolve the binary — which hid the
+    entry from the app grid. `install.sh` now writes an absolute `Exec=` path.
+  - The icon was named `agentpet`, mismatching the application id. It's now
+    installed as `io.github.tranhuuhuy297.agentpet` (icon file, `Icon=` key, and
+    desktop-file basename all share the reverse-DNS id), at 48–512 px.
+  - The per-user `hicolor` dir had no `index.theme`; gnome-shell's stricter icon
+    loader skips such a dir, so `Icon=` resolved to a generic gear even though
+    GTK could find the PNG. `install.sh` now writes a minimal `index.theme`
+    (512 dir marked Scalable so one icon serves small requests) and a flat
+    `pixmaps` fallback, then force-rebuilds the icon cache.
+  - Fixed `install_assets` aborting early under `set -e` (a trailing `&&` that
+    returned non-zero on the source path), which had skipped the cache refresh,
+    legacy cleanup, and app relaunch.
+
 ## 0.7.0 — 2026-06-09
 
 ### Single-instance guard
