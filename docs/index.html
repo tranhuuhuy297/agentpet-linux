@@ -205,6 +205,8 @@ html[data-theme="light"] .pet .caption { color:#2a3a45; background:rgba(255,255,
   color:var(--cyan); margin-bottom:14px; }
 h2 { font-size:clamp(28px,3.4vw,40px); letter-spacing:-.02em; line-height:1.1; font-weight:700; }
 .sec-head p { color:var(--muted); font-size:17px; margin-top:14px; }
+.sec-head p a { color:var(--cyan); text-decoration:underline; text-underline-offset:2px; text-decoration-thickness:1px; transition:color .15s; }
+.sec-head p a:hover { color:var(--text); }
 
 /* surfaces */
 .surfaces { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; }
@@ -349,7 +351,7 @@ html.no-js .reveal { opacity:1; transform:none; }
     <div>
       <div class="eyebrow"><span class="dot"></span> Open source · Rust + GTK4 · Ubuntu 22.04+</div>
       <h1>Watch every agent.<br><span class="accent">At a glance.</span></h1>
-      <p class="sub">Run Claude Code and Codex in parallel — and always know which is <b>working</b>, which is <b>done</b>, and which is <b>waiting for you</b>. A tray monitor and an ambient desktop pet do the watching.</p>
+      <p class="sub">An ambient desktop pet + tray monitor that shows your AI coding agents at a glance — <b>working</b>, <b>done</b>, or <b>waiting for you</b>.</p>
       <div class="cmd" id="install">
         <span class="prompt">$</span>
         <code id="installCmd">curl -fsSL https://raw.githubusercontent.com/tranhuuhuy297/agentpet-linux/main/install.sh | bash</code>
@@ -432,36 +434,27 @@ html.no-js .reveal { opacity:1; transform:none; }
 <section class="sec" id="usage" style="padding-top:0;">
   <div class="wrap">
     <div class="sec-head reveal">
-      <h2>Up and running in four steps.</h2>
-      <p>Install, connect your agents, add a pet — and you're watching.</p>
+      <div class="kicker">Get started</div>
+      <h2>Up and running in three steps.</h2>
+      <p>Ran the <a href="#install">install command above</a>? Launch <b>agentpet</b> — it opens straight to <b>Settings</b>, where these three steps live.</p>
     </div>
     <div class="steps reveal">
 
       <div class="step">
         <div class="num">1</div>
         <div class="body">
-          <h3>Install AgentPet</h3>
-          <p>One command on Ubuntu 22.04+ — prebuilt binary, no build.</p>
-          <div class="cmd">
-            <span class="prompt">$</span>
-            <code>curl -fsSL https://raw.githubusercontent.com/tranhuuhuy297/agentpet-linux/main/install.sh | bash</code>
-            <button class="copy" data-copy="curl -fsSL https://raw.githubusercontent.com/tranhuuhuy297/agentpet-linux/main/install.sh | bash">Copy</button>
-          </div>
-          <p style="margin-top:11px;">Then run <code>agentpet</code> or launch from your app menu.</p>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="num">2</div>
-        <div class="body">
           <h3>Connect your agents</h3>
           <p>In <b>Settings → General</b>, toggle on the agents you use — AgentPet adds its hook safely, with backups.</p>
+          <div style="margin-top:11px; display:flex; gap:9px; align-items:flex-start; padding:11px 13px; border-radius:10px; background:color-mix(in srgb, var(--waiting) 13%, transparent); border:1px solid color-mix(in srgb, var(--waiting) 40%, transparent);">
+            <span aria-hidden="true" style="flex-shrink:0; font-size:15px; line-height:1.4;">🔑</span>
+            <p style="margin:0; font-size:14px;"><b style="color:var(--waiting);">Codex only —</b> Codex runs <b>trusted hooks only</b>. In a <b>new</b> Codex session, run <code>/hooks</code> and trust <code>agentpet hook --agent codex</code>, or its pet won't show.</p>
+          </div>
           <p style="margin-top:9px;">Any other CLI? Wrap it: <code>agentpet run -- aider</code>.</p>
         </div>
       </div>
 
       <div class="step">
-        <div class="num">3</div>
+        <div class="num">2</div>
         <div class="body">
           <h3>Add a pet from Petdex</h3>
           <p>Grab a slug from <a href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a> and install it with the Petdex CLI:</p>
@@ -475,7 +468,7 @@ html.no-js .reveal { opacity:1; transform:none; }
       </div>
 
       <div class="step">
-        <div class="num">4</div>
+        <div class="num">3</div>
         <div class="body">
           <h3>Pick a pet for each agent</h3>
           <p>In <b>Settings → Pet</b>, assign a pet to each agent. It appears when that agent is active — its mood mirroring the live state: calm, busy, or waving.</p>

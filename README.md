@@ -68,6 +68,10 @@ a pet on the **Pet** tab. Pets are installed with the official
 [Petdex](https://petdex.dev) CLI; the Pet tab lists what you've installed and
 lets you assign one per agent (see [Pets](#pets) below).
 
+- **Codex needs the hook trusted.** Codex only runs hooks you've explicitly
+  trusted, so enabling it in Settings isn't enough on its own. In a **new**
+  Codex session run `/hooks` and trust `agentpet hook --agent codex` — until you
+  do, Codex reports no state and its pet never appears.
 - **Tray icon** needs the GNOME *AppIndicator and KStatusNotifierItem Support*
   extension. Without it the app still runs; reach Settings/Quit from the monitor
   window (right-click the pet).

@@ -157,10 +157,18 @@ fn confirm_then_install(
     suppress: Rc<Cell<bool>>,
 ) {
     let parent = sw.root().and_then(|r| r.downcast::<Window>().ok());
-    let body = format!(
+    let mut body = format!(
         "AgentPet will add its hook to:\n{}\n\nYou can turn this off any time.",
         spec.settings_path.display()
     );
+    // Codex only runs hooks the user has explicitly trusted; just writing the
+    // config isn't enough (unlike Claude). Without this step its pet never
+    // appears, so spell out the one-time trust action here.
+    if spec.kind == agentpet_core::state::AgentKind::Codex {
+        body.push_str(
+            "\n\nCodex runs trusted hooks only. In a NEW Codex session, run /hooks and trust \"agentpet hook --agent codex\" — otherwise its pet won't show up.",
+        );
+    }
     let dialog = MessageDialog::builder()
         .modal(true)
         .message_type(MessageType::Question)
