@@ -31,6 +31,10 @@ const SLOT_GAP: i32 = 24;
 /// Top-left anchor for the first pet; later slots step to the right.
 const ANCHOR_X: i32 = 80;
 const ANCHOR_Y: i32 = 120;
+/// Delays after map at which keep-above is re-asserted, to beat the compositor's
+/// window-manage race that can otherwise drop the map-time request.
+const REASSERT_EARLY_MS: u64 = 200;
+const REASSERT_LATE_MS: u64 = 800;
 
 /// Sliced pet-pack frames, ready to paint (one inner Vec per animation clip).
 type Clips = Rc<RefCell<Vec<Vec<cairo::ImageSurface>>>>;
@@ -134,6 +138,17 @@ impl PetWindow {
                 // Stagger each agent's pet so multiple pets don't stack.
                 let x = ANCHOR_X + slot * (SIZE + SLOT_GAP);
                 let _ = move_window(xid, x, ANCHOR_Y);
+                // Re-assert keep-above once the compositor has finished managing
+                // the window. The map-time client message can reach the root
+                // before Mutter tracks the XWayland window and get dropped,
+                // which left the pet below other windows (most visible when an
+                // agent starts working and the pet first appears). Two delayed
+                // re-asserts cover variable compositor timing.
+                for delay in [REASSERT_EARLY_MS, REASSERT_LATE_MS] {
+                    glib::timeout_add_local_once(std::time::Duration::from_millis(delay), move || {
+                        let _ = apply_pet_traits(xid);
+                    });
+                }
             }
         });
 
