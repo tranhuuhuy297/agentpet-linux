@@ -9,3 +9,4 @@ Terminal=false
 Categories=Utility;Development;
 Keywords=agent;claude;codex;monitor;pet;
 StartupNotify=false
+StartupWMClass=agentpet

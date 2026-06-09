@@ -27,10 +27,16 @@ APP_DIR="$PREFIX/share/applications"
 ICON_DIR="$PREFIX/share/icons/hicolor/512x512/apps"
 
 BIN="$BIN_DIR/agentpet"
-DESKTOP="$APP_DIR/agentpet.desktop"
+# The desktop file basename MUST equal the GTK application_id so GNOME maps the
+# running windows (pet/monitor/settings) to this entry and shows the real icon
+# in the dock/alt-tab — not just the app-menu launcher.
+DESKTOP="$APP_DIR/io.github.tranhuuhuy297.agentpet.desktop"
 ICON="$ICON_DIR/agentpet.png"
 # Pre-otter installs put an svg here; cleaned up on install/uninstall.
 LEGACY_ICON="$PREFIX/share/icons/hicolor/scalable/apps/agentpet.svg"
+# Earlier installs named the desktop file plainly; remove it so there is no
+# duplicate launcher after the rename to match the application_id.
+LEGACY_DESKTOP="$APP_DIR/agentpet.desktop"
 
 refresh_caches() {
   command -v update-desktop-database >/dev/null && update-desktop-database "$APP_DIR" 2>/dev/null || true
@@ -98,12 +104,12 @@ ensure_build_deps() {
 # Install the desktop entry + icon from the local repo when present, else fetch
 # them from the repo (so curl | bash with no checkout still gets them).
 install_assets() {
-  if [ -f "$SRC_DIR/assets/agentpet.desktop" ]; then
-    install -Dm644 "$SRC_DIR/assets/agentpet.desktop" "$DESKTOP"
+  if [ -f "$SRC_DIR/assets/io.github.tranhuuhuy297.agentpet.desktop" ]; then
+    install -Dm644 "$SRC_DIR/assets/io.github.tranhuuhuy297.agentpet.desktop" "$DESKTOP"
     install -Dm644 "$SRC_DIR/assets/agentpet.png" "$ICON"
   else
     local tmp; tmp="$(mktemp -d)"
-    curl -fsSL "$RAW/assets/agentpet.desktop" -o "$tmp/d" 2>/dev/null && install -Dm644 "$tmp/d" "$DESKTOP" || true
+    curl -fsSL "$RAW/assets/io.github.tranhuuhuy297.agentpet.desktop" -o "$tmp/d" 2>/dev/null && install -Dm644 "$tmp/d" "$DESKTOP" || true
     curl -fsSL "$RAW/assets/agentpet.png" -o "$tmp/i" 2>/dev/null && install -Dm644 "$tmp/i" "$ICON" || true
     rm -rf "$tmp"
   fi
@@ -119,7 +125,7 @@ finalize_install() {
   echo "==> Installing to $PREFIX"
   install -Dm755 "$src" "$BIN"
   install_assets
-  rm -f "$LEGACY_ICON"
+  rm -f "$LEGACY_ICON" "$LEGACY_DESKTOP"
   refresh_caches
 
   if [ -n "$was_running" ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
@@ -212,7 +218,7 @@ do_uninstall() {
   fi
 
   echo "==> Removing installed files…"
-  rm -f "$BIN" "$DESKTOP" "$ICON" "$LEGACY_ICON"
+  rm -f "$BIN" "$DESKTOP" "$ICON" "$LEGACY_ICON" "$LEGACY_DESKTOP"
   refresh_caches
 
   if [ "$keep_data" = "--keep-data" ]; then

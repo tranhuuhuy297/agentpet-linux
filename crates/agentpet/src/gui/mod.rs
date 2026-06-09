@@ -8,7 +8,7 @@ use gtk4::prelude::*;
 use std::process::ExitCode;
 use std::rc::Rc;
 
-const APP_ID: &str = "online.thenightwatcher.agentpet";
+const APP_ID: &str = "io.github.tranhuuhuy297.agentpet";
 
 pub fn run_gui() -> ExitCode {
     // Mirror the spike: force the X11 backend so the pet runs under XWayland.
