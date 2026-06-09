@@ -2,6 +2,19 @@
 
 All notable changes to AgentPet for Linux.
 
+## 0.6.0 — 2026-06-09
+
+### Monitor row icons
+- **Each monitor row now leads with two icons:** the coding agent's official
+  mark (Claude Code's pixel creature, Codex's terminal-prompt cloud — embedded
+  in the binary and drawn on a light rounded backing so the black Codex mark
+  stays visible on dark themes; `run`-wrapped CLIs fall back to a ">_" monogram)
+  and the agent's assigned pet sprite (first idle frame). The pet icon falls back
+  to a state-coloured dot when no Petdex pack is installed.
+- Pet icons are cached per agent kind (re-renders run every second for the live
+  timers, so the spritesheet is sliced once, not per tick) and the cache is
+  dropped on a pet-selection change so the new pet shows up immediately.
+
 ## 0.4.0 — 2026-06-08
 
 ### Pets from the Petdex CLI

@@ -329,7 +329,7 @@ fn mood_color(mood: PetMood) -> (f64, f64, f64) {
 
 /// Converts an RGBA image to a premultiplied-ARGB32 cairo surface (BGRA byte
 /// order on little-endian).
-fn to_surface(img: &image::RgbaImage) -> Option<cairo::ImageSurface> {
+pub(crate) fn to_surface(img: &image::RgbaImage) -> Option<cairo::ImageSurface> {
     let (w, h) = (img.width() as i32, img.height() as i32);
     let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).ok()?;
     let stride = surface.stride() as usize;

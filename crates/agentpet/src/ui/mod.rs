@@ -111,6 +111,9 @@ impl Ui {
         for (kind, pet) in self.pets.borrow().iter() {
             pet.set_pack(load_pack_for_kind(*kind).as_ref());
         }
+        // The monitor renders a small pet icon per agent from the same packs;
+        // drop its cache so a new selection shows up there too.
+        self.monitor.reload_pets();
     }
 }
 
@@ -140,7 +143,7 @@ fn kind_slot(kind: AgentKind) -> i32 {
 
 /// Loads the pack configured for `kind` (its own pick, else the global default),
 /// falling back to the first installed pack that slices successfully.
-fn load_pack_for_kind(kind: AgentKind) -> Option<PetPack> {
+pub(crate) fn load_pack_for_kind(kind: AgentKind) -> Option<PetPack> {
     let cfg = Config::load();
     let want = cfg.pet_id_for(kind);
     let mut first = None;
