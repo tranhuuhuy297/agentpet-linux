@@ -100,7 +100,7 @@ impl PetWindow {
             let label = label.to_string();
             area.set_draw_func(move |_, cr, w, h| {
                 draw(cr, w, h, mood.get(), phase.get(), &clips.borrow(), &bindings.borrow());
-                draw_label(cr, w, h, &label);
+                draw_label(cr, w, h, &label, mood.get());
             });
         }
         {
@@ -325,30 +325,76 @@ fn draw_blob(cr: &CairoContext, w: i32, h: i32, mood: PetMood, bob: f64) {
     }
 }
 
-/// Draws the agent name as a translucent pill caption at the bottom of the pet,
-/// so multiple pets (especially ones sharing a pack) stay identifiable.
-fn draw_label(cr: &CairoContext, w: i32, h: i32, text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    let (w, h) = (w as f64, h as f64);
+/// Draws the pet's at-a-glance state readout: a translucent pill at the bottom
+/// holding a mood-coloured status dot, the agent name, and the current state word
+/// (e.g. "● Claude Code · waiting"). The sprite animation alone doesn't reliably
+/// tell working/waiting/done apart, so the colour + word make the state
+/// unambiguous; the colour and wording match the Monitor so the two agree. The
+/// name also keeps pets sharing a pack identifiable. Font auto-shrinks so the
+/// caption fits the pet's width instead of clipping at the window edge.
+fn draw_label(cr: &CairoContext, w: i32, h: i32, name: &str, mood: PetMood) {
+    let (state_word, dot) = mood_caption(mood);
+    let text = if name.is_empty() {
+        state_word.to_string()
+    } else {
+        format!("{name} · {state_word}")
+    };
+
+    let (wf, hf) = (w as f64, h as f64);
     cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
-    cr.set_font_size(13.0);
-    let Ok(ext) = cr.text_extents(text) else { return };
 
     let (pad_x, pad_y) = (8.0, 4.0);
-    let bw = ext.width() + pad_x * 2.0;
+    let dot_r = 4.0;
+    let dot_gap = 6.0;
+    // Non-text pill width (both paddings, the dot, and the dot→text gap). The
+    // remaining horizontal space, minus a small screen margin, is the budget for
+    // the glyphs; shrink the font to a floor when the caption would overflow.
+    let fixed = dot_r * 2.0 + dot_gap + pad_x * 2.0;
+    let avail_text = (wf - 4.0 - fixed).max(1.0);
+
+    let base = 13.0;
+    cr.set_font_size(base);
+    let Ok(probe) = cr.text_extents(&text) else { return };
+    let font_size = if probe.width() > avail_text {
+        (base * avail_text / probe.width()).max(8.0)
+    } else {
+        base
+    };
+    cr.set_font_size(font_size);
+    let Ok(ext) = cr.text_extents(&text) else { return };
+
+    let bw = fixed + ext.width();
     let bh = ext.height() + pad_y * 2.0;
-    let bx = (w - bw) / 2.0;
-    let by = h - bh - 2.0;
+    let bx = (wf - bw) / 2.0;
+    let by = hf - bh - 2.0;
 
     rounded_rect(cr, bx, by, bw, bh, bh / 2.0);
     cr.set_source_rgba(0.08, 0.09, 0.12, 0.66);
     let _ = cr.fill();
 
+    // Status dot, vertically centred in the pill.
+    let (dr, dg, db) = dot;
+    cr.arc(bx + pad_x + dot_r, by + bh / 2.0, dot_r, 0.0, std::f64::consts::TAU);
+    cr.set_source_rgba(dr, dg, db, 1.0);
+    let _ = cr.fill();
+
+    // Caption text, starting just after the dot.
     cr.set_source_rgba(0.96, 0.97, 1.0, 0.96);
-    cr.move_to(bx + pad_x - ext.x_bearing(), by + pad_y - ext.y_bearing());
-    let _ = cr.show_text(text);
+    let text_x = bx + pad_x + dot_r * 2.0 + dot_gap - ext.x_bearing();
+    cr.move_to(text_x, by + pad_y - ext.y_bearing());
+    let _ = cr.show_text(&text);
+}
+
+/// State word + status-dot colour for a mood. Matches the Monitor's wording and
+/// palette (`monitor.rs`) so the pet and the Monitor never disagree about state.
+/// `Celebrate` (the transient played when a turn finishes) reads as "done".
+fn mood_caption(mood: PetMood) -> (&'static str, (f64, f64, f64)) {
+    match mood {
+        PetMood::Working => ("working", (0.290, 0.776, 0.941)), // #4ac6f0
+        PetMood::Waiting => ("waiting", (0.941, 0.690, 0.125)), // #f0b020
+        PetMood::Done | PetMood::Celebrate => ("done", (0.337, 0.831, 0.447)), // #56d472
+        PetMood::Idle => ("idle", (0.400, 0.400, 0.400)),       // #666666
+    }
 }
 
 fn rounded_rect(cr: &CairoContext, x: f64, y: f64, w: f64, h: f64, r: f64) {

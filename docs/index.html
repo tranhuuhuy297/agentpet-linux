@@ -150,8 +150,12 @@ html[data-theme="light"] .tray .tpill { background:rgba(0,0,0,.06); }
 .pet.face-left svg { transform:scaleX(-1); }
 .pet.face-left.dragging svg, .pet.face-right.dragging svg { transition:none; }
 .pet .caption { position:absolute; bottom:-26px; left:50%; transform:translateX(-50%); white-space:nowrap;
+  display:inline-flex; align-items:center; gap:6px;
   font-family:var(--mono); font-size:11px; color:#cfe2ee; background:rgba(8,14,20,.6); padding:3px 9px;
   border-radius:20px; backdrop-filter:blur(4px); }
+/* Mood-coloured status dot mirrors the real pet's caption (● name · state). */
+.pet .caption::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--moodc);
+  flex-shrink:0; box-shadow:0 0 0 3px color-mix(in srgb, var(--moodc) 26%, transparent); transition:background .5s; }
 html[data-theme="light"] .pet .caption { color:#2a3a45; background:rgba(255,255,255,.55); }
 .creature { transform-origin:50% 92%; animation:bob var(--bob,3s) ease-in-out infinite; }
 @keyframes bob { 0%,100%{transform:translateY(0) scaleX(1) scaleY(1)} 45%{transform:translateY(-8px) scaleX(.98) scaleY(1.03)} 100%{transform:translateY(0)} }
@@ -424,7 +428,7 @@ html.no-js .reveal { opacity:1; transform:none; }
       <div class="card reveal">
         <div class="ci"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><circle cx="9.5" cy="12" r="1.2" fill="currentColor"/><circle cx="14.5" cy="12" r="1.2" fill="currentColor"/></svg></div>
         <h3>Desktop pet</h3>
-        <p>A floating companion whose mood mirrors your agents — calm, busy, or waving for attention. It follows you across every workspace.</p>
+        <p>A floating companion whose mood mirrors your agents, with a colour-coded label that spells out the state — <b>working</b>, <b>waiting</b>, or <b>done</b> — so there's no guessing. It follows you across every workspace.</p>
       </div>
     </div>
   </div>

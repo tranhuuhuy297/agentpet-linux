@@ -2,6 +2,19 @@
 
 All notable changes to AgentPet for Linux.
 
+## 0.9.0 — 2026-06-09
+
+### Readable pet state
+- **The desktop pet now spells out its state.** Previously the only state cues
+  were the pet pack's animation clip plus subtle speed/bob differences, so with a
+  real Petdex pack "working", "waiting for input", and "done" looked nearly
+  identical — and the caption showed only the agent name. The caption pill now
+  renders a mood-coloured status dot, the agent name, and the state word (e.g.
+  `● Claude Code · waiting`), reusing the Monitor's exact palette and wording so
+  the pet and Monitor always agree. The caption font auto-shrinks to fit smaller
+  pets instead of clipping at the window edge.
+- **Landing page** hero pet caption gained the matching colour-coded status dot.
+
 ## 0.8.0 — 2026-06-09
 
 ### Pet on every workspace
