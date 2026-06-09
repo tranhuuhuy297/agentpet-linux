@@ -26,9 +26,10 @@ All notable changes to AgentPet for Linux.
   `~/.local/share/icons/hicolor` has no `index.theme`, so `gtk-update-icon-cache`
   failed with "No theme index file" and `install.sh` swallowed the error —
   leaving a stale cache that shadowed the freshly-installed otter PNG, so GNOME
-  fell back to a generic dock/alt-tab icon. The refresh now passes
-  `--ignore-theme-index` (and, as a fallback, drops the stale cache and bumps the
-  dir mtime) so the otter app icon registers reliably. GNOME Shell caches the
+  fell back to a generic dock/alt-tab icon. The refresh now force-rebuilds the
+  cache (`gtk-update-icon-cache -q -f -t`) and, if even that fails, drops the
+  stale cache and bumps the dir mtime so GTK/GNOME re-scan the directory and pick
+  up the icon directly — so the otter app icon registers reliably. GNOME Shell caches the
   window→app→icon mapping in memory, so an existing session still needs a
   log-out/in to pick up the change.
 
