@@ -15,6 +15,19 @@ pub fn run_gui() -> ExitCode {
     // SAFETY: set before any GDK/display init.
     unsafe { std::env::set_var("GDK_BACKEND", "x11") };
 
+    // Authoritative single-instance guard. The socket server below carries its
+    // own probe, but it runs on a background thread whose exit code is dropped —
+    // so without this, a second launch (e.g. the autostart entry firing while a
+    // pet is already open at login) would still build a duplicate tray icon and
+    // pet. Take the lock before any side effect and bail if one is already held.
+    let _lock = match crate::daemon::single_instance::acquire() {
+        Some(lock) => lock,
+        None => {
+            eprintln!("agentpet is already running");
+            return ExitCode::SUCCESS;
+        }
+    };
+
     // A hook stores the absolute binary path captured when the user toggled it
     // on. If the binary later moves (reinstall to a new prefix, AppImage
     // remount, manual move) the stored path goes stale while the toggle still
@@ -34,7 +47,15 @@ pub fn run_gui() -> ExitCode {
     });
 
     let app = gtk4::Application::builder().application_id(APP_ID).build();
+    // GTK fires `activate` once per launch *and again* whenever the app is
+    // re-activated (a duplicate launch forwards activate to this primary
+    // instance). Building the UI on every activate spawns a second tray icon
+    // and a second pet in the same process. Build the surfaces exactly once.
+    let built = std::cell::Cell::new(false);
     app.connect_activate(move |app| {
+        if built.replace(true) {
+            return;
+        }
         let ui = Rc::new(crate::ui::Ui::build(app, cmd_tx.clone()));
         ui.reload_pet(); // load any already-installed pack at startup
 
@@ -66,6 +87,7 @@ pub fn run_gui() -> ExitCode {
                         UiCommand::OpenSettings => ui.show_settings(),
                         UiCommand::Quit => app.quit(),
                         UiCommand::ReloadPets => ui.reload_pet(),
+                        UiCommand::ResizePets(px) => ui.resize_pets(px),
                     }
                 }
             });

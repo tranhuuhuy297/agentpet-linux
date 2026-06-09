@@ -1,0 +1,1 @@
+- [Project Conventions](project_conventions.md) — agentpet-linux Rust+GTK4 conventions (UiCommand channel, Config persistence, pet windows)

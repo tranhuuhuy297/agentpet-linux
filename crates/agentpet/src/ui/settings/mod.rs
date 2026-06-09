@@ -29,6 +29,7 @@ impl SettingsWindow {
             .default_height(600)
             .build();
         window.set_hide_on_close(true);
+        super::window_icon::install(&window); // otter in the dock/alt-tab
 
         let pets = pet_page::PetPage::new(cmd);
         let stack = Stack::new();
@@ -44,6 +45,8 @@ impl SettingsWindow {
         let header = HeaderBar::new();
         let title = Label::new(Some("Settings"));
         title.add_css_class("win-title");
+        // Breathing room from the window's left edge / controls.
+        title.set_margin_start(8);
         header.pack_start(&title);
         header.set_title_widget(Some(&switcher));
         window.set_titlebar(Some(&header));

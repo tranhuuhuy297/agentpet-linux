@@ -2,6 +2,46 @@
 
 All notable changes to AgentPet for Linux.
 
+## 0.7.0 — 2026-06-09
+
+### Single-instance guard
+- **Only one AgentPet process can run at a time.** A second launch (e.g. the
+  autostart entry firing at login while a pet is already open) used to build a
+  duplicate tray icon and pet. Both the GUI and the headless daemon now take an
+  exclusive, non-blocking advisory `flock` on `agentpet.lock` before any side
+  effect and exit cleanly if it's already held — the kernel drops the lock on
+  process exit or crash, so a dead instance never leaves it stuck. The GTK
+  `activate` handler also guards against re-activation building the UI twice.
+
+### Window icon (dock / alt-tab)
+- **The otter shows in the dock and alt-tab immediately.** GTK4 dropped the
+  per-window icon API and leaves the dock to resolve window → `.desktop` →
+  `Icon=` through the theme cache, which only refreshes on relogin and shows
+  nothing when run uninstalled (source checkout / AppImage). Each toplevel now
+  stamps `_NET_WM_ICON` with the embedded otter pixels on map, sidestepping the
+  theme/cache entirely. The desktop-file icon stays as the launcher fallback.
+
+### Dock icon registration
+- **Fixed the installer never refreshing the icon cache.** A per-user
+  `~/.local/share/icons/hicolor` has no `index.theme`, so `gtk-update-icon-cache`
+  failed with "No theme index file" and `install.sh` swallowed the error —
+  leaving a stale cache that shadowed the freshly-installed otter PNG, so GNOME
+  fell back to a generic dock/alt-tab icon. The refresh now passes
+  `--ignore-theme-index` (and, as a fallback, drops the stale cache and bumps the
+  dir mtime) so the otter app icon registers reliably. GNOME Shell caches the
+  window→app→icon mapping in memory, so an existing session still needs a
+  log-out/in to pick up the change.
+
+### Pet size setting
+- **A "Pet size" slider** (80–200 px) now sits at the top of the Settings → Pet
+  tab. Dragging it resizes every live pet instantly and the choice persists in
+  `config.json` (`pet_size`, default 110). The size is global across agents;
+  newly-spawned pets read the saved value, so a restart keeps your size.
+- Wired the previously-unused `pet_size` config field through to the pet window:
+  `PetWindow` is now created at the configured size and resizes live via a new
+  `UiCommand::ResizePets` (carries the px value, so the drag path touches no
+  disk; the config write is debounced 250 ms after the last move).
+
 ## 0.6.0 — 2026-06-09
 
 ### Monitor row icons

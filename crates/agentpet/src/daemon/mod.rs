@@ -6,6 +6,8 @@
 //! With `sink = None` it runs headless (logs to stderr) — useful for testing
 //! without a display.
 
+pub mod single_instance;
+
 use crate::snapshot::UiUpdate;
 use agentpet_core::ipc;
 use agentpet_core::mapper::StateMapper;
@@ -22,6 +24,10 @@ type Sink = Option<Sender<UiUpdate>>;
 
 /// Runs the daemon headless (no UI) to completion on a fresh Tokio runtime.
 pub fn run_headless() -> ExitCode {
+    let Some(_lock) = single_instance::acquire() else {
+        eprintln!("agentpet: a daemon is already running");
+        return ExitCode::FAILURE;
+    };
     match build_runtime() {
         Ok(rt) => rt.block_on(serve(None)),
         Err(e) => {

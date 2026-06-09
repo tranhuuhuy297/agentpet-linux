@@ -45,6 +45,7 @@ impl MonitorWindow {
             .default_height(460)
             .build();
         window.set_hide_on_close(true); // closing hides; the app keeps running
+        super::window_icon::install(&window); // otter in the dock/alt-tab
 
         let list = ListBox::new();
         list.set_selection_mode(gtk4::SelectionMode::None);

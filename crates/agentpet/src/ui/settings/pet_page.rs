@@ -16,14 +16,16 @@ use agentpet_core::config::Config;
 use agentpet_core::sprite::load_pack;
 use agentpet_core::state::AgentKind;
 use async_channel::Sender;
+use crate::pet::{clamp_pet_size, MAX_PET_SIZE, MIN_PET_SIZE};
 use gtk4::prelude::*;
 use gtk4::{
     gdk, glib, Align, Box as GtkBox, Button, DropDown, Image, Label, ListBox, Orientation,
-    PolicyType, ScrolledWindow, SearchEntry,
+    PolicyType, Scale, ScrolledWindow, SearchEntry,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Duration;
 
 const MAX_ROWS: usize = 200;
 const BLOB_COLORS: usize = 8;
@@ -206,6 +208,7 @@ impl PetPage {
         root.set_margin_bottom(26);
         root.set_margin_start(24);
         root.set_margin_end(24);
+        root.append(&build_size_row(cmd_tx.clone()));
         root.append(&agent_row);
         root.append(&guide);
         root.append(&search);
@@ -265,6 +268,60 @@ fn status_text(count: usize) -> String {
         1 => "1 pet installed · from ~/.petdex/pets".to_string(),
         n => format!("{n} pets installed · from ~/.petdex/pets"),
     }
+}
+
+/// Global pet-size slider row at the top of the Pet tab. Moving it resizes every
+/// live pet instantly via `ResizePets` (disk-free), and persists the choice to
+/// `Config.pet_size` on a 250 ms debounce so a drag doesn't thrash the file.
+fn build_size_row(cmd_tx: Sender<UiCommand>) -> GtkBox {
+    let outer = GtkBox::new(Orientation::Vertical, 0);
+    outer.add_css_class("boxed");
+
+    // Inner box so the `.boxed > box` padding rule applies — without it the title
+    // and slider sit flush against the rounded border (same wrap as the guide).
+    let inner = GtkBox::new(Orientation::Vertical, 6);
+
+    let title = Label::new(Some("Pet size"));
+    title.set_xalign(0.0);
+    title.add_css_class("group-title");
+
+    let initial = clamp_pet_size(Config::load().pet_size);
+    let scale = Scale::with_range(
+        Orientation::Horizontal,
+        MIN_PET_SIZE as f64,
+        MAX_PET_SIZE as f64,
+        1.0,
+    );
+    scale.set_value(initial as f64);
+    scale.set_hexpand(true);
+    scale.set_draw_value(true);
+    scale.set_value_pos(gtk4::PositionType::Right);
+    scale.set_digits(0);
+
+    // Debounce token: each move bumps the generation; only the timeout matching
+    // the latest generation actually writes, so disk is touched once per pause.
+    let debounce = Rc::new(Cell::new(0u64));
+    scale.connect_value_changed(move |s| {
+        let px = s.value().round() as i32;
+        let _ = cmd_tx.try_send(UiCommand::ResizePets(px));
+        let generation = debounce.get().wrapping_add(1);
+        debounce.set(generation);
+        let debounce = debounce.clone();
+        glib::timeout_add_local_once(Duration::from_millis(250), move || {
+            if debounce.get() == generation {
+                let mut cfg = Config::load();
+                // Clamp on persist too, so the stored value can never drift from
+                // what the live pet shows (which goes through the same clamp).
+                cfg.pet_size = clamp_pet_size(px as f64) as f64;
+                let _ = cfg.save();
+            }
+        });
+    });
+
+    inner.append(&title);
+    inner.append(&scale);
+    outer.append(&inner);
+    outer
 }
 
 /// A boxed guide telling the user how to install pets via the Petdex CLI, with

@@ -40,7 +40,17 @@ LEGACY_DESKTOP="$APP_DIR/agentpet.desktop"
 
 refresh_caches() {
   command -v update-desktop-database >/dev/null && update-desktop-database "$APP_DIR" 2>/dev/null || true
-  command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f "$PREFIX/share/icons/hicolor" 2>/dev/null || true
+  # A per-user hicolor dir has no index.theme, so plain gtk-update-icon-cache
+  # fails ("No theme index file") and leaves the previous cache in place — a
+  # stale cache then shadows the freshly-installed PNG and the dock falls back to
+  # a generic icon. --ignore-theme-index builds the cache without an index; if
+  # even that fails, drop any stale cache and bump the dir mtime so GTK/GNOME
+  # re-scan the directory and pick up the icon directly.
+  local hicolor="$PREFIX/share/icons/hicolor"
+  if command -v gtk-update-icon-cache >/dev/null; then
+    gtk-update-icon-cache -q -f -t "$hicolor" 2>/dev/null \
+      || { rm -f "$hicolor/icon-theme.cache" 2>/dev/null; touch "$hicolor" 2>/dev/null; }
+  fi
 }
 
 # Stop a running AgentPet app/daemon so the new binary can take over (the running

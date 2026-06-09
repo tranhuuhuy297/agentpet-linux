@@ -25,7 +25,15 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
-const SIZE: i32 = 140;
+/// Supported on-screen pet size range (px), matched by the Settings slider.
+pub const MIN_PET_SIZE: i32 = 80;
+pub const MAX_PET_SIZE: i32 = 200;
+
+/// Clamps a configured pet size (points) to the supported on-screen range.
+pub fn clamp_pet_size(value: f64) -> i32 {
+    (value.round() as i32).clamp(MIN_PET_SIZE, MAX_PET_SIZE)
+}
+
 /// Horizontal gap between adjacent agents' pets at first placement.
 const SLOT_GAP: i32 = 24;
 /// Top-left anchor for the first pet; later slots step to the right.
@@ -41,6 +49,8 @@ type Clips = Rc<RefCell<Vec<Vec<cairo::ImageSurface>>>>;
 
 pub struct PetWindow {
     window: ApplicationWindow,
+    /// The pet's canvas; resized live when the user changes the size setting.
+    area: DrawingArea,
     mood: Rc<Cell<PetMood>>,
     clips: Clips,
     bindings: Rc<RefCell<PetBindings>>,
@@ -56,12 +66,13 @@ impl PetWindow {
         cmd: async_channel::Sender<UiCommand>,
         slot: i32,
         label: &str,
+        size: i32,
     ) -> Self {
         let window = ApplicationWindow::builder()
             .application(app)
             .title("AgentPet")
-            .default_width(SIZE)
-            .default_height(SIZE)
+            .default_width(size)
+            .default_height(size)
             .decorated(false)
             .resizable(false)
             .build();
@@ -81,8 +92,8 @@ impl PetWindow {
         let bindings = Rc::new(RefCell::new(PetBindings::defaults(0)));
 
         let area = DrawingArea::new();
-        area.set_content_width(SIZE);
-        area.set_content_height(SIZE);
+        area.set_content_width(size);
+        area.set_content_height(size);
         {
             let (mood, phase, clips, bindings) =
                 (mood.clone(), phase.clone(), clips.clone(), bindings.clone());
@@ -136,7 +147,7 @@ impl PetWindow {
                     eprintln!("agentpet: pet window X11 setup failed: {e}");
                 }
                 // Stagger each agent's pet so multiple pets don't stack.
-                let x = ANCHOR_X + slot * (SIZE + SLOT_GAP);
+                let x = ANCHOR_X + slot * (size + SLOT_GAP);
                 let _ = move_window(xid, x, ANCHOR_Y);
                 // Re-assert keep-above once the compositor has finished managing
                 // the window. The map-time client message can reach the root
@@ -152,12 +163,31 @@ impl PetWindow {
             }
         });
 
+        crate::ui::window_icon::install(&window); // otter in alt-tab
         window.present();
-        PetWindow { window, mood, clips, bindings }
+        PetWindow { window, area, mood, clips, bindings }
     }
 
     pub fn set_mood(&self, mood: PetMood) {
         self.mood.set(mood);
+    }
+
+    /// Resizes the pet live. The window is non-resizable and sized to its child,
+    /// so updating the canvas's content size grows/shrinks the window to match;
+    /// `draw()` scales the sprite to the new dimensions automatically. The
+    /// `set_default_size` nudge helps WMs that otherwise keep a mapped,
+    /// non-resizable window's larger allocation when shrinking under XWayland.
+    pub fn set_size(&self, size: i32) {
+        self.area.set_content_width(size);
+        self.area.set_content_height(size);
+        self.window.set_default_size(size, size);
+        // GTK won't reliably *shrink* a mapped, non-resizable window under
+        // XWayland — Mutter keeps the larger allocation, so the pet stops
+        // shrinking once shown. Push the new geometry straight to the WM (the
+        // same X11 path we use to move the pet) so both directions work.
+        if let Some(xid) = window_xid(&self.window) {
+            let _ = resize_window(xid, size, size);
+        }
     }
 
     /// Closes and destroys the window (its agent went idle / ended).
@@ -498,4 +528,30 @@ fn move_window(window: u32, x: i32, y: i32) -> Result<(), Box<dyn std::error::Er
     conn.configure_window(window, &ConfigureWindowAux::new().x(x).y(y))?;
     conn.flush()?;
     Ok(())
+}
+
+/// Forces the pet window's pixel size at the WM level. Needed because GTK4 won't
+/// shrink a mapped, non-resizable XWayland window on its own (see `set_size`).
+fn resize_window(window: u32, w: i32, h: i32) -> Result<(), Box<dyn std::error::Error>> {
+    let (conn, _screen) = x11rb::connect(None)?;
+    conn.configure_window(
+        window,
+        &ConfigureWindowAux::new().width(w as u32).height(h as u32),
+    )?;
+    conn.flush()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_pet_size_rounds_and_bounds_to_range() {
+        assert_eq!(clamp_pet_size(110.0), 110, "in-range value kept");
+        assert_eq!(clamp_pet_size(110.4), 110, "rounds down");
+        assert_eq!(clamp_pet_size(110.6), 111, "rounds up");
+        assert_eq!(clamp_pet_size(10.0), MIN_PET_SIZE, "clamped up to min");
+        assert_eq!(clamp_pet_size(999.0), MAX_PET_SIZE, "clamped down to max");
+    }
 }

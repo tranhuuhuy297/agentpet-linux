@@ -8,6 +8,7 @@
 pub mod monitor;
 pub mod settings;
 pub mod tray;
+pub mod window_icon;
 
 use crate::pet::PetWindow;
 use crate::snapshot::{UiCommand, UiUpdate};
@@ -87,11 +88,13 @@ impl Ui {
             if let Some(pet) = pets.get(kind) {
                 pet.set_mood(*mood);
             } else {
+                let size = crate::pet::clamp_pet_size(Config::load().pet_size);
                 let pet = PetWindow::new(
                     &self.app,
                     self.cmd.clone(),
                     kind_slot(*kind),
                     agent_display_name(*kind),
+                    size,
                 );
                 pet.set_pack(load_pack_for_kind(*kind).as_ref());
                 pet.set_mood(*mood);
@@ -102,6 +105,15 @@ impl Ui {
 
     pub fn show_monitor(&self) {
         self.monitor.show();
+    }
+
+    /// Resizes every live pet to `size` (px, clamped to the supported range).
+    /// Driven by the Settings size slider for instant, disk-free preview.
+    pub fn resize_pets(&self, size: i32) {
+        let size = size.clamp(crate::pet::MIN_PET_SIZE, crate::pet::MAX_PET_SIZE);
+        for pet in self.pets.borrow().values() {
+            pet.set_size(size);
+        }
     }
 
     /// Reloads each live pet's configured pack (after a download or a per-agent

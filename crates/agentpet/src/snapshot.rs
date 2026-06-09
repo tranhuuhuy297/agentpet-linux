@@ -37,4 +37,7 @@ pub enum UiCommand {
     Quit,
     /// Reload every live pet's pack (after a per-agent pet selection changes).
     ReloadPets,
+    /// Resize every live pet (px) after the user moves the size slider. Carries
+    /// the value so the resize is instant and touches no disk on the drag path.
+    ResizePets(i32),
 }
