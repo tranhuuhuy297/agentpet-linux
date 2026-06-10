@@ -1,5 +1,11 @@
 # AgentPet for Linux
 
+> Built on **[AgentPet](https://github.com/ntd4996/agentpet)** (macOS) by
+> [@ntd4996](https://github.com/ntd4996). If you like this port, please star the
+> original ⭐ → **https://github.com/ntd4996/agentpet**
+
+[![Based on AgentPet](https://img.shields.io/badge/based%20on-AgentPet-blue?logo=github)](https://github.com/ntd4996/agentpet)
+
 A native **Rust + GTK4** app for **Ubuntu 22.04+**, inspired by
 [AgentPet](https://github.com/ntd4996/agentpet) (macOS). Watch your AI coding agents (Claude Code and
 Codex) running in parallel and see — at a glance — which one is **working**,
@@ -138,6 +144,9 @@ This project takes its idea from [AgentPet](https://github.com/ntd4996/agentpet)
 by [@ntd4996](https://github.com/ntd4996) — the original macOS app that defined
 the concept, agent hook integrations, and pet/monitor UX — and builds an Ubuntu
 version of it. All credit for the original idea and design goes to that project.
+
+**Using macOS?** Get the original **[AgentPet ⭐](https://github.com/ntd4996/agentpet)** —
+and if this Linux port is useful to you, please star the original to help it grow.
 
 ## License
 
