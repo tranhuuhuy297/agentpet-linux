@@ -2,7 +2,7 @@
 
 All notable changes to AgentPet for Linux.
 
-## 0.12.0 — 2026-06-12
+## 0.13.0 — 2026-06-12
 
 ### Speech bubbles above the pet
 - **Each pet now shows a short mood-based line in a speech bubble above its sprite.**
@@ -26,6 +26,11 @@ All notable changes to AgentPet for Linux.
 - **While the bubble is shown, the bottom pill drops the redundant state word** —
   it reads `● Claude Code` (the dot still colour-codes the state, the bubble carries
   the wording); with the bubble off it stays `● Claude Code · working` as before.
+
+## 0.12.0 — 2026-06-11
+
+- Docs-only release: MIT `LICENSE` file added; landing page and README now
+  cross-link the upstream macOS AgentPet project with a star CTA.
 
 ## 0.11.0 — 2026-06-09
 
