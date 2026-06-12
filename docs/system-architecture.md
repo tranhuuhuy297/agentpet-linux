@@ -86,8 +86,13 @@ they don't overlap.
 When an agent has waiting sessions, its pet lists them below the sprite (project
 + elapsed timer, capped at 4 with a "+N" overflow) so each "needs you" session is
 visible at a glance; with none waiting the pet shows the single aggregate state.
-The caption rendering lives in `pet/caption.rs`. Fuller per-session detail still
-lives in the monitor window and the tray count (both aggregate across all agents).
+Above the sprite, if `Config.show_chat` is on, a fixed-height speech bubble rotates
+through mood-matched lines anchored to the animation phase (built-in or custom per
+mood, never blank). The caption rendering and bubble drawing live in `pet/caption.rs`.
+Fuller per-session detail still lives in the monitor window and the tray count
+(both aggregate across all agents). The speech bubble configuration (show/hide,
+source, custom lines per mood) is edited in Settings → Chat and persists to
+`Config.chat_*` fields.
 
 ### Pet packs — local Petdex install
 AgentPet hosts no art and downloads nothing. Pets are installed by the user with

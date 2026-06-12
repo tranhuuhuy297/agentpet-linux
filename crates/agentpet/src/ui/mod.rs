@@ -125,12 +125,14 @@ impl Ui {
         }
     }
 
-    /// Reloads each live pet's configured pack (after a download or a per-agent
-    /// pet selection change). Pets that aren't currently shown pick up the new
-    /// pack the next time their agent becomes active.
+    /// Reloads each live pet's configured pack and chat-bubble config (after a
+    /// download, a per-agent pet selection change, or a chat settings change).
+    /// Pets that aren't currently shown pick up the new config the next time
+    /// their agent becomes active.
     pub fn reload_pet(&self) {
         for (kind, pet) in self.pets.borrow().iter() {
             pet.set_pack(load_pack_for_kind(*kind).as_ref());
+            pet.refresh_chat();
         }
         // The monitor renders a small pet icon per agent from the same packs;
         // drop its cache so a new selection shows up there too.

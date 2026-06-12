@@ -7,6 +7,8 @@
 //! no pack is installed.
 
 use crate::snapshot::UiCommand;
+use agentpet_core::chat;
+use agentpet_core::config::Config;
 use agentpet_core::sprite::{PetBindings, PetPack};
 use agentpet_core::state::PetMood;
 use gtk4::cairo;
@@ -16,6 +18,7 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, CssProvider, DrawingArea, GestureClick, GestureDrag};
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use x11rb::connection::Connection;
@@ -27,7 +30,7 @@ use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
 mod caption;
 pub use caption::WaitingRow;
-use caption::{draw_label, draw_waiting, waiting_block_height};
+use caption::{bubble_band_height, draw_bubble, draw_label, draw_waiting, waiting_block_height};
 
 /// Supported on-screen pet size range (px), matched by the Settings slider.
 pub const MIN_PET_SIZE: i32 = 80;
@@ -51,6 +54,55 @@ const REASSERT_LATE_MS: u64 = 800;
 /// Sliced pet-pack frames, ready to paint (one inner Vec per animation clip).
 type Clips = Rc<RefCell<Vec<Vec<cairo::ImageSurface>>>>;
 
+/// Phase units per bubble line. With mood phase rates of 1.8–4.8 rad/s this
+/// rotates lines every ~2.5–6.5 s (faster moods chat a little faster too).
+const PHASE_PER_LINE: f64 = 12.0;
+
+/// Snapshot of the chat-bubble config, loaded once per pet (and re-read on
+/// `ReloadPets`) so the 12.5 Hz draw loop never touches disk. Lines are
+/// pre-resolved per mood (custom-or-system), so drawing is a pure lookup.
+struct ChatState {
+    show: bool,
+    lines: HashMap<PetMood, Vec<String>>,
+}
+
+impl ChatState {
+    fn load() -> Self {
+        let cfg = Config::load();
+        let lines = PetMood::ALL.iter().map(|&m| (m, chat::lines_for(&cfg, m))).collect();
+        ChatState { show: cfg.show_chat, lines }
+    }
+
+    /// The bubble line for `mood` at `phase`; `None` when bubbles are off.
+    fn line(&self, mood: PetMood, phase: f64) -> Option<&str> {
+        if !self.show {
+            return None;
+        }
+        chat::pick(self.lines.get(&mood)?, phase, PHASE_PER_LINE)
+    }
+
+    /// Active line index, folded into the redraw key so a rotation actually
+    /// triggers a repaint (and nothing repaints while it holds still).
+    fn line_index(&self, mood: PetMood, phase: f64) -> usize {
+        if !self.show {
+            return 0;
+        }
+        self.lines
+            .get(&mood)
+            .map_or(0, |l| chat::pick_index(phase, PHASE_PER_LINE, l.len()))
+    }
+
+    /// Extra canvas height reserved above the sprite for the bubble. Constant
+    /// per `show_chat` value so mood changes never thrash window geometry.
+    fn band(&self) -> i32 {
+        if self.show {
+            bubble_band_height()
+        } else {
+            0
+        }
+    }
+}
+
 pub struct PetWindow {
     window: ApplicationWindow,
     /// The pet's canvas; resized live when the user changes the size setting.
@@ -64,6 +116,8 @@ pub struct PetWindow {
     /// Sessions of this pet's agent that are waiting on the user; listed below
     /// the sprite so a "needs you" session is never hidden behind busy work.
     waiting: Rc<RefCell<Vec<WaitingRow>>>,
+    /// Chat-bubble config snapshot (toggle + resolved lines per mood).
+    chat: Rc<RefCell<ChatState>>,
 }
 
 impl PetWindow {
@@ -102,31 +156,44 @@ impl PetWindow {
         let bindings = Rc::new(RefCell::new(PetBindings::defaults(0)));
         let size_cell = Rc::new(Cell::new(size));
         let waiting: Rc<RefCell<Vec<WaitingRow>>> = Rc::new(RefCell::new(Vec::new()));
+        let chat = Rc::new(RefCell::new(ChatState::load()));
 
         let area = DrawingArea::new();
         area.set_content_width(size);
         area.set_content_height(size);
         {
-            let (mood, phase, clips, bindings, waiting, size_cell) = (
+            let (mood, phase, clips, bindings, waiting, size_cell, chat) = (
                 mood.clone(),
                 phase.clone(),
                 clips.clone(),
                 bindings.clone(),
                 waiting.clone(),
                 size_cell.clone(),
+                chat.clone(),
             );
             let label = label.to_string();
             area.set_draw_func(move |_, cr, w, _h| {
                 // The sprite occupies the top square (w × base); any waiting list
                 // is drawn below it, so always lay the sprite against `base`.
+                // The speech bubble lives in its own band ABOVE the sprite, so
+                // everything else shifts down by the band height.
                 let base = size_cell.get();
+                let chat = chat.borrow();
+                if let Some(text) = chat.line(mood.get(), phase.get()) {
+                    draw_bubble(cr, w, text);
+                }
+                let _ = cr.save();
+                cr.translate(0.0, chat.band() as f64);
                 draw(cr, w, base, mood.get(), phase.get(), &clips.borrow(), &bindings.borrow());
                 let rows = waiting.borrow();
                 if rows.is_empty() {
-                    draw_label(cr, w, base, &label, mood.get());
+                    // With the bubble on, it carries the mood wording — the
+                    // bottom pill keeps just the dot + agent name.
+                    draw_label(cr, w, base, &label, mood.get(), !chat.show);
                 } else {
                     draw_waiting(cr, w, &label, &rows, crate::unix_now(), base);
                 }
+                let _ = cr.restore();
             });
         }
         {
@@ -137,10 +204,15 @@ impl PetWindow {
             // Hold the area weakly so the timer self-cancels once this pet's
             // window is closed (a pet per agent comes and goes); a strong ref
             // would keep ticking and redrawing a destroyed widget forever.
-            let (mood, phase, dragging, waiting) =
-                (mood.clone(), phase.clone(), dragging.clone(), waiting.clone());
+            let (mood, phase, dragging, waiting, chat) = (
+                mood.clone(),
+                phase.clone(),
+                dragging.clone(),
+                waiting.clone(),
+                chat.clone(),
+            );
             let area_weak = area.downgrade();
-            let last_drawn = Cell::new((PetMood::Idle as u8, 0_usize, i32::MIN, 0_u64));
+            let last_drawn = Cell::new((PetMood::Idle as u8, 0_usize, i32::MIN, 0_u64, 0_usize));
             glib::timeout_add_local(std::time::Duration::from_millis(TICK_MS), move || {
                 let Some(area) = area_weak.upgrade() else {
                     return glib::ControlFlow::Break;
@@ -155,11 +227,14 @@ impl PetWindow {
                 // fold whole seconds into the redraw key; otherwise it stays 0 and
                 // redraws remain gated on frame/bob changes (near-zero idle CPU).
                 let secs = if waiting.borrow().is_empty() { 0 } else { crate::unix_now() as u64 };
+                // The bubble's line index joins the key so a line rotation
+                // repaints — and a static line never does.
                 let key = (
                     m as u8,
                     (p * frame_rate(m)) as usize,
                     (p.sin() * bob_amplitude(m)).round() as i32,
                     secs,
+                    chat.borrow().line_index(m, p),
                 );
                 if last_drawn.get() != key {
                     last_drawn.set(key);
@@ -197,7 +272,11 @@ impl PetWindow {
 
         crate::ui::window_icon::install(&window); // otter in alt-tab
         window.present();
-        PetWindow { window, area, mood, clips, bindings, size: size_cell, waiting }
+        let pet = PetWindow { window, area, mood, clips, bindings, size: size_cell, waiting, chat };
+        // Fold the bubble band into the initial geometry (the builder sized the
+        // window to the bare sprite square).
+        pet.apply_geometry();
+        pet
     }
 
     pub fn set_mood(&self, mood: PetMood) {
@@ -217,11 +296,14 @@ impl PetWindow {
     }
 
     /// Applies the current geometry: width = base size, height = base + the
-    /// waiting list's extra height. Pushes the size to GTK and straight to the WM
-    /// (XWayland won't reliably shrink a mapped, non-resizable window on its own).
+    /// bubble band above + the waiting list's extra height below. Pushes the
+    /// size to GTK and straight to the WM (XWayland won't reliably shrink a
+    /// mapped, non-resizable window on its own).
     fn apply_geometry(&self) {
         let base = self.size.get();
-        let h = base + waiting_block_height(self.waiting.borrow().len());
+        let h = base
+            + self.chat.borrow().band()
+            + waiting_block_height(self.waiting.borrow().len());
         self.area.set_content_width(base);
         self.area.set_content_height(h);
         self.window.set_default_size(base, h);
@@ -248,6 +330,14 @@ impl PetWindow {
     /// Closes and destroys the window (its agent went idle / ended).
     pub fn close(&self) {
         self.window.close();
+    }
+
+    /// Re-reads the chat-bubble config from disk (after Settings saved it) and
+    /// reapplies geometry, so toggling the bubble shows/hides its band live.
+    pub fn refresh_chat(&self) {
+        *self.chat.borrow_mut() = ChatState::load();
+        self.apply_geometry();
+        self.area.queue_draw();
     }
 
     /// Loads a pet pack's frames (or clears them, falling back to the blob).

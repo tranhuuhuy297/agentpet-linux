@@ -8,6 +8,7 @@
 //! unit-testable without a display server.
 
 pub mod catalog;
+pub mod chat;
 pub mod config;
 pub mod event;
 pub mod hooks;

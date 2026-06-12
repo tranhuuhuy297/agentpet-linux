@@ -2,6 +2,31 @@
 
 All notable changes to AgentPet for Linux.
 
+## 0.12.0 — 2026-06-12
+
+### Speech bubbles above the pet
+- **Each pet now shows a short mood-based line in a speech bubble above its sprite.**
+  The line rotates through a configurable set (default: "on it!", "need you 👀", "done ✅")
+  anchored to the animation phase — no separate timer, so idle CPU is unchanged.
+  The bubbles can be toggled on/off via Settings → Chat → "Show chat" switch.
+- **Settings → Chat tab** lets you pick between built-in system lines (per mood) and
+  custom lines. Per-mood custom text editors persist all edits with 400ms debounce.
+  Blanks fall back to system lines so the bubble is never empty.
+- New pure module `agentpet-core/src/chat.rs` (7 unit tests) contains the phase-driven
+  line picker, fallback logic, and mood-indexed line sets; all deterministic and
+  testable without a display server.
+- Pet window height gains a fixed band above the sprite when `show_chat` is on
+  (`bubble_band_height()`), so mood changes never cause window thrashing.
+  New drawing functions `draw_bubble()` and `draw_pill()` live in `pet/caption.rs`.
+- Config fields `show_chat`, `chat_source`, and `chat_custom` (existing) are now consumed
+  by the pet and settings UI; `ReloadPets` command syncs live pets on any chat setting change.
+- **Caption/bubble text now renders through Pango** instead of cairo's toy text API,
+  so emoji and non-Latin glyphs resolve through system font fallback instead of
+  showing tofu boxes (new `pangocairo` dep — same pango GTK4 already pulls).
+- **While the bubble is shown, the bottom pill drops the redundant state word** —
+  it reads `● Claude Code` (the dot still colour-codes the state, the bubble carries
+  the wording); with the bubble off it stays `● Claude Code · working` as before.
+
 ## 0.11.0 — 2026-06-09
 
 ### Waiting header reads like the other states

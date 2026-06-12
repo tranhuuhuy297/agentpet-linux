@@ -4,6 +4,7 @@
 //! boxed groups).
 
 mod about;
+mod chat_page;
 mod general;
 mod pet_page;
 mod style;
@@ -31,10 +32,12 @@ impl SettingsWindow {
         window.set_hide_on_close(true);
         super::window_icon::install(&window); // otter in the dock/alt-tab
 
+        let chat = chat_page::build(cmd.clone());
         let pets = pet_page::PetPage::new(cmd);
         let stack = Stack::new();
         stack.add_titled(&general::build(), Some("general"), "General");
         stack.add_titled(pets.widget(), Some("pet"), "Pet");
+        stack.add_titled(&chat, Some("chat"), "Chat");
         stack.add_titled(&about::build(), Some("about"), "About");
         stack.set_visible_child_name("general");
 
