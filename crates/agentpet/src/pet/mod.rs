@@ -58,6 +58,19 @@ type Clips = Rc<RefCell<Vec<Vec<cairo::ImageSurface>>>>;
 /// rotates lines every ~2.5–6.5 s (faster moods chat a little faster too).
 const PHASE_PER_LINE: f64 = 12.0;
 
+/// Hard cap (px) on how wide the canvas may grow to fit caption/bubble text.
+/// Within the cap, long project/agent names and chat lines show in full at
+/// normal font size; only past it does the text shrink and ellipsize.
+const CAPTION_MAX_W: i32 = 360;
+
+/// Canvas width that fits `needed` px of pill, snapped UP to 16px steps so the
+/// per-second timer text ("5m 9s" → "5m 10s") doesn't resize the window every
+/// tick, clamped to [base, CAPTION_MAX_W].
+fn quantized_caption_width(needed: f64, base: i32) -> i32 {
+    let stepped = (needed.ceil() as i32 + 15) / 16 * 16;
+    stepped.clamp(base, CAPTION_MAX_W.max(base))
+}
+
 /// Snapshot of the chat-bubble config, loaded once per pet (and re-read on
 /// `ReloadPets`) so the 12.5 Hz draw loop never touches disk. Lines are
 /// pre-resolved per mood (custom-or-system), so drawing is a pure lookup.
@@ -118,6 +131,10 @@ pub struct PetWindow {
     waiting: Rc<RefCell<Vec<WaitingRow>>>,
     /// Chat-bubble config snapshot (toggle + resolved lines per mood).
     chat: Rc<RefCell<ChatState>>,
+    /// Canvas width (px) the current caption/bubble text wants, ≥ the base
+    /// size. Measured by the draw func, applied via the geometry path, so long
+    /// text shows in full instead of being shrunk/ellipsized.
+    desired_w: Rc<Cell<i32>>,
 }
 
 impl PetWindow {
@@ -157,12 +174,13 @@ impl PetWindow {
         let size_cell = Rc::new(Cell::new(size));
         let waiting: Rc<RefCell<Vec<WaitingRow>>> = Rc::new(RefCell::new(Vec::new()));
         let chat = Rc::new(RefCell::new(ChatState::load()));
+        let desired_w = Rc::new(Cell::new(size));
 
         let area = DrawingArea::new();
         area.set_content_width(size);
         area.set_content_height(size);
         {
-            let (mood, phase, clips, bindings, waiting, size_cell, chat) = (
+            let (mood, phase, clips, bindings, waiting, size_cell, chat, desired_w) = (
                 mood.clone(),
                 phase.clone(),
                 clips.clone(),
@@ -170,30 +188,63 @@ impl PetWindow {
                 waiting.clone(),
                 size_cell.clone(),
                 chat.clone(),
+                desired_w.clone(),
             );
+            let window_weak = window.downgrade();
             let label = label.to_string();
-            area.set_draw_func(move |_, cr, w, _h| {
+            area.set_draw_func(move |da, cr, w, _h| {
                 // The sprite occupies the top square (w × base); any waiting list
                 // is drawn below it, so always lay the sprite against `base`.
                 // The speech bubble lives in its own band ABOVE the sprite, so
                 // everything else shifts down by the band height.
                 let base = size_cell.get();
-                let chat = chat.borrow();
-                if let Some(text) = chat.line(mood.get(), phase.get()) {
-                    draw_bubble(cr, w, text);
+                let mut needed = 0.0_f64;
+                {
+                    let cfg = chat.borrow();
+                    if let Some(text) = cfg.line(mood.get(), phase.get()) {
+                        needed = draw_bubble(cr, w, text);
+                    }
+                    let _ = cr.save();
+                    cr.translate(0.0, cfg.band() as f64);
+                    draw(cr, w, base, mood.get(), phase.get(), &clips.borrow(), &bindings.borrow());
+                    let rows = waiting.borrow();
+                    if rows.is_empty() {
+                        // With the bubble on, it carries the mood wording — the
+                        // bottom pill keeps just the dot + agent name.
+                        needed =
+                            needed.max(draw_label(cr, w, base, &label, mood.get(), !cfg.show));
+                    } else {
+                        needed = needed
+                            .max(draw_waiting(cr, w, &label, &rows, crate::unix_now(), base));
+                    }
+                    let _ = cr.restore();
                 }
-                let _ = cr.save();
-                cr.translate(0.0, chat.band() as f64);
-                draw(cr, w, base, mood.get(), phase.get(), &clips.borrow(), &bindings.borrow());
-                let rows = waiting.borrow();
-                if rows.is_empty() {
-                    // With the bubble on, it carries the mood wording — the
-                    // bottom pill keeps just the dot + agent name.
-                    draw_label(cr, w, base, &label, mood.get(), !chat.show);
-                } else {
-                    draw_waiting(cr, w, &label, &rows, crate::unix_now(), base);
+
+                // Widen (or re-narrow) the window so the widest pill fits at
+                // full size. Applied from an idle so geometry never changes
+                // mid-draw; the resize triggers one follow-up draw that fits.
+                let want = quantized_caption_width(needed, base);
+                if want != desired_w.get() {
+                    desired_w.set(want);
+                    let (window_weak, area_weak) = (window_weak.clone(), da.downgrade());
+                    let (size_cell, waiting, chat, desired_w) = (
+                        size_cell.clone(),
+                        waiting.clone(),
+                        chat.clone(),
+                        desired_w.clone(),
+                    );
+                    glib::idle_add_local_once(move || {
+                        let (Some(window), Some(area)) = (window_weak.upgrade(), area_weak.upgrade())
+                        else {
+                            return;
+                        };
+                        let base = size_cell.get();
+                        let h = base
+                            + chat.borrow().band()
+                            + waiting_block_height(waiting.borrow().len());
+                        push_geometry(&window, &area, desired_w.get().max(base), h);
+                    });
                 }
-                let _ = cr.restore();
             });
         }
         {
@@ -272,7 +323,17 @@ impl PetWindow {
 
         crate::ui::window_icon::install(&window); // otter in alt-tab
         window.present();
-        let pet = PetWindow { window, area, mood, clips, bindings, size: size_cell, waiting, chat };
+        let pet = PetWindow {
+            window,
+            area,
+            mood,
+            clips,
+            bindings,
+            size: size_cell,
+            waiting,
+            chat,
+            desired_w,
+        };
         // Fold the bubble band into the initial geometry (the builder sized the
         // window to the bare sprite square).
         pet.apply_geometry();
@@ -295,21 +356,18 @@ impl PetWindow {
         self.area.queue_draw();
     }
 
-    /// Applies the current geometry: width = base size, height = base + the
-    /// bubble band above + the waiting list's extra height below. Pushes the
-    /// size to GTK and straight to the WM (XWayland won't reliably shrink a
-    /// mapped, non-resizable window on its own).
+    /// Applies the current geometry: width = base size (or wider, when the
+    /// caption/bubble text needs it), height = base + the bubble band above +
+    /// the waiting list's extra height below. Pushes the size to GTK and
+    /// straight to the WM (XWayland won't reliably shrink a mapped,
+    /// non-resizable window on its own).
     fn apply_geometry(&self) {
         let base = self.size.get();
+        let w = self.desired_w.get().max(base);
         let h = base
             + self.chat.borrow().band()
             + waiting_block_height(self.waiting.borrow().len());
-        self.area.set_content_width(base);
-        self.area.set_content_height(h);
-        self.window.set_default_size(base, h);
-        if let Some(xid) = window_xid(&self.window) {
-            let _ = resize_window(xid, base, h);
-        }
+        push_geometry(&self.window, &self.area, w, h);
     }
 
     /// Resizes the pet live. The window is non-resizable and sized to its child,
@@ -324,6 +382,9 @@ impl PetWindow {
         // to the WM (the same X11 path we use to move the pet) so both directions
         // work, and folds in any waiting-list height.
         self.size.set(size);
+        // Reset the caption width to the new base; the next draw re-measures
+        // and re-widens if the text still needs more room.
+        self.desired_w.set(size);
         self.apply_geometry();
     }
 
@@ -664,14 +725,37 @@ fn move_window(window: u32, x: i32, y: i32) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-/// Forces the pet window's pixel size at the WM level. Needed because GTK4 won't
-/// shrink a mapped, non-resizable XWayland window on its own (see `set_size`).
-fn resize_window(window: u32, w: i32, h: i32) -> Result<(), Box<dyn std::error::Error>> {
-    let (conn, _screen) = x11rb::connect(None)?;
-    conn.configure_window(
-        window,
-        &ConfigureWindowAux::new().width(w as u32).height(h as u32),
-    )?;
+/// Pushes a pet window's pixel geometry to GTK and to the WM. Needed because
+/// GTK4 won't shrink a mapped, non-resizable XWayland window on its own (see
+/// `set_size`). Width changes shift x by half the delta so the (canvas-centred)
+/// sprite stays visually anchored instead of walking across the screen when a
+/// caption grows or shrinks.
+fn push_geometry(window: &ApplicationWindow, area: &DrawingArea, w: i32, h: i32) {
+    let dw = w - area.content_width();
+    area.set_content_width(w);
+    area.set_content_height(h);
+    window.set_default_size(w, h);
+    if let Some(xid) = window_xid(window) {
+        let _ = resize_window_anchored(xid, w, h, dw);
+    }
+}
+
+/// Forces the window's pixel size at the WM level, compensating a width change
+/// of `dw` by moving x so the window's centre keeps its spot.
+fn resize_window_anchored(
+    window: u32,
+    w: i32,
+    h: i32,
+    dw: i32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (conn, screen_num) = x11rb::connect(None)?;
+    let mut aux = ConfigureWindowAux::new().width(w as u32).height(h as u32);
+    if dw != 0 {
+        let root = conn.setup().roots[screen_num].root;
+        let origin = conn.translate_coordinates(window, root, 0, 0)?.reply()?;
+        aux = aux.x(origin.dst_x as i32 - dw / 2);
+    }
+    conn.configure_window(window, &aux)?;
     conn.flush()?;
     Ok(())
 }
@@ -679,6 +763,21 @@ fn resize_window(window: u32, w: i32, h: i32) -> Result<(), Box<dyn std::error::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caption_width_quantizes_and_clamps() {
+        // Shorter than the pet: stays at base, no needless wide window.
+        assert_eq!(quantized_caption_width(60.0, 110), 110);
+        // Wider than the pet: snapped UP to a 16px step (192 = 12×16).
+        assert_eq!(quantized_caption_width(180.0, 110), 192);
+        // Small per-second timer growth lands in the same step → no resize.
+        assert_eq!(quantized_caption_width(181.0, 110), quantized_caption_width(190.0, 110));
+        // Absurdly long text: capped, the shrink+ellipsis fallback takes over.
+        assert_eq!(quantized_caption_width(9000.0, 110), CAPTION_MAX_W);
+        // Base above the cap (max pet size > cap is impossible today, but the
+        // clamp must stay well-ordered anyway).
+        assert_eq!(quantized_caption_width(9000.0, 400), 400);
+    }
 
     #[test]
     fn clamp_pet_size_rounds_and_bounds_to_range() {

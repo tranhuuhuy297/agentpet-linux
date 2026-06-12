@@ -2,6 +2,15 @@
 
 All notable changes to AgentPet for Linux.
 
+## 0.13.1 — 2026-06-12
+
+- **The pet window now widens to show long caption/bubble text in full** —
+  project names, agent name + state, and chat lines no longer shrink to a tiny
+  font or ellipsize while there's room. The canvas grows (16px steps, capped at
+  360px) to fit the widest pill, the sprite stays centred and anchored in
+  place, and the width snaps back when the text shortens. Only past the cap
+  does the previous shrink-then-middle-ellipsize fallback kick in.
+
 ## 0.13.0 — 2026-06-12
 
 ### Speech bubbles above the pet

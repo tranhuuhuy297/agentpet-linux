@@ -44,8 +44,9 @@ pub(crate) fn bubble_band_height() -> i32 {
 
 /// Draws the speech bubble: one centred light pill at the top of the bubble
 /// band (the caller reserves `bubble_band_height()` above the sprite).
-pub(crate) fn draw_bubble(cr: &CairoContext, w: i32, text: &str) {
-    draw_pill(cr, w, 1.0, text, None, BUBBLE_BG, BUBBLE_FG);
+/// Returns the canvas width that would show the text at full size.
+pub(crate) fn draw_bubble(cr: &CairoContext, w: i32, text: &str) -> f64 {
+    draw_pill(cr, w, 1.0, text, None, BUBBLE_BG, BUBBLE_FG)
 }
 
 /// Extra canvas height (px) the waiting list needs below the square sprite area.
@@ -64,7 +65,8 @@ pub(crate) fn waiting_block_height(n: usize) -> i32 {
 /// the state word (e.g. "● Claude Code · working"). When the speech bubble is
 /// shown it already carries the mood wording, so the pill drops the redundant
 /// state word and keeps just the dot + name. Colour + wording match the
-/// Monitor. Font auto-shrinks so the caption fits the pet's width.
+/// Monitor. Font auto-shrinks so the caption fits the pet's width. Returns the
+/// canvas width that would show the text at full size (so the window can grow).
 pub(crate) fn draw_label(
     cr: &CairoContext,
     w: i32,
@@ -72,7 +74,7 @@ pub(crate) fn draw_label(
     name: &str,
     mood: PetMood,
     with_state: bool,
-) {
+) -> f64 {
     let (state_word, dot) = mood_caption(mood);
     let text = match (name.is_empty(), with_state) {
         (true, _) => state_word.to_string(),
@@ -87,7 +89,7 @@ pub(crate) fn draw_label(
     let fixed = dot_r * 2.0 + dot_gap + pad_x * 2.0;
     let avail_text = (wf - 4.0 - fixed).max(1.0);
 
-    let layout = fitted_layout(cr, &text, 13.0, 8.0, avail_text);
+    let (layout, full_w) = fitted_layout(cr, &text, 13.0, 8.0, avail_text);
     let ink = layout.pixel_extents().0;
 
     let bw = fixed + ink.width() as f64;
@@ -108,11 +110,14 @@ pub(crate) fn draw_label(
     let text_x = bx + pad_x + dot_r * 2.0 + dot_gap;
     cr.move_to(text_x - ink.x() as f64, by + pad_y - ink.y() as f64);
     pangocairo::functions::show_layout(cr, &layout);
+
+    full_w + fixed + 4.0
 }
 
 /// Draws the agent name then one pill per waiting session (amber dot + project +
 /// elapsed), capped at `MAX_ROWS` with a "+N nữa" overflow pill. Pills stack
-/// downward starting just below the square sprite area (`sprite_h`).
+/// downward starting just below the square sprite area (`sprite_h`). Returns
+/// the canvas width that would show the widest pill at full size.
 pub(crate) fn draw_waiting(
     cr: &CairoContext,
     w: i32,
@@ -120,29 +125,33 @@ pub(crate) fn draw_waiting(
     rows: &[WaitingRow],
     now: f64,
     sprite_h: i32,
-) {
+) -> f64 {
     let amber = mood_caption(PetMood::Waiting).1;
     let mut y = sprite_h as f64 + GAP_TOP;
+    let mut needed = 0.0_f64;
 
     // Header reads like the single-line caption ("● Claude Code · waiting") so the
     // waiting state shows beside the agent name, consistent with working/done.
     let header = if name.is_empty() { "waiting".to_string() } else { format!("{name} · waiting") };
-    draw_pill(cr, w, y, &header, Some(amber), PILL_BG, PILL_FG);
+    needed = needed.max(draw_pill(cr, w, y, &header, Some(amber), PILL_BG, PILL_FG));
     y += ROW_PITCH;
 
     for row in rows.iter().take(MAX_ROWS) {
         let elapsed = format_elapsed((now - row.state_since).max(0.0));
         let text = format!("{} · {}", row.project, elapsed);
-        draw_pill(cr, w, y, &text, Some(amber), PILL_BG, PILL_FG);
+        needed = needed.max(draw_pill(cr, w, y, &text, Some(amber), PILL_BG, PILL_FG));
         y += ROW_PITCH;
     }
     if rows.len() > MAX_ROWS {
-        draw_pill(cr, w, y, &format!("+{} nữa", rows.len() - MAX_ROWS), None, PILL_BG, PILL_FG);
+        let text = format!("+{} nữa", rows.len() - MAX_ROWS);
+        needed = needed.max(draw_pill(cr, w, y, &text, None, PILL_BG, PILL_FG));
     }
+    needed
 }
 
 /// Draws one centred pill of fixed height `PILL_H` at top `top_y`, optionally with
 /// a leading coloured dot. Font auto-shrinks (floor 7px) to fit the pet width.
+/// Returns the canvas width that would show the text at full size.
 #[allow(clippy::too_many_arguments)]
 fn draw_pill(
     cr: &CairoContext,
@@ -152,7 +161,7 @@ fn draw_pill(
     dot: Option<(f64, f64, f64)>,
     bg: (f64, f64, f64, f64),
     fg: (f64, f64, f64, f64),
-) {
+) -> f64 {
     let wf = w as f64;
     let pad_x = 7.0;
     let dot_r = if dot.is_some() { 3.5 } else { 0.0 };
@@ -160,7 +169,7 @@ fn draw_pill(
     let fixed = dot_r * 2.0 + dot_gap + pad_x * 2.0;
     let avail = (wf - 4.0 - fixed).max(1.0);
 
-    let layout = fitted_layout(cr, text, 11.0, 7.0, avail);
+    let (layout, full_w) = fitted_layout(cr, text, 11.0, 7.0, avail);
     let ink = layout.pixel_extents().0;
 
     let bw = fixed + ink.width() as f64;
@@ -182,13 +191,23 @@ fn draw_pill(
     let ty = top_y + (PILL_H - ink.height() as f64) / 2.0 - ink.y() as f64;
     cr.move_to(text_x - ink.x() as f64, ty);
     pangocairo::functions::show_layout(cr, &layout);
+
+    full_w + fixed + 4.0
 }
 
 /// Pango layout for `text`: bold Sans at `px`, auto-shrunk (floor `min_px`) so
 /// its ink width fits `avail`. Pango resolves every glyph through system font
 /// fallback — emoji and non-Latin chat lines render instead of tofu boxes,
 /// which cairo's toy text API (one face, no fallback) could not do.
-fn fitted_layout(cr: &CairoContext, text: &str, px: f64, min_px: f64, avail: f64) -> pango::Layout {
+/// Also returns the full-size ink width, which callers surface so the pet
+/// window can widen until the text fits unshrunk.
+fn fitted_layout(
+    cr: &CairoContext,
+    text: &str,
+    px: f64,
+    min_px: f64,
+    avail: f64,
+) -> (pango::Layout, f64) {
     let layout = pangocairo::functions::create_layout(cr);
     layout.set_text(text);
     let mut desc = pango::FontDescription::new();
@@ -200,14 +219,14 @@ fn fitted_layout(cr: &CairoContext, text: &str, px: f64, min_px: f64, avail: f64
     if ink_w > avail {
         desc.set_absolute_size((px * avail / ink_w).max(min_px) * pango::SCALE as f64);
         layout.set_font_description(Some(&desc));
-        // If the floor font still can't fit (long project/agent names on a
-        // small pet), ellipsize in the MIDDLE so both ends stay readable —
-        // the name's start and the suffix ("· working", "· 5m 12s") — instead
-        // of the pill overflowing and getting clipped at the canvas edge.
+        // Last resort: the window has already widened to its cap and the floor
+        // font still can't fit. Ellipsize in the MIDDLE so both ends stay
+        // readable — the name's start and the suffix ("· working", "· 5m 12s")
+        // — instead of the pill getting clipped at the canvas edge.
         layout.set_width((avail * pango::SCALE as f64) as i32);
         layout.set_ellipsize(pango::EllipsizeMode::Middle);
     }
-    layout
+    (layout, ink_w)
 }
 
 /// State word + status-dot colour for a mood. Matches the Monitor's wording and
